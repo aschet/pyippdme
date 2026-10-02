@@ -1,5 +1,8 @@
 # pyippdme
 
+[![CI](https://github.com/aschet/pyippdme/actions/workflows/ci.yml/badge.svg)](https://github.com/aschet/pyippdme/actions/workflows/ci.yml)
+[![Docs](https://github.com/aschet/pyippdme/actions/workflows/docs.yml/badge.svg)](https://aschet.github.io/pyippdme/)
+
 A Python client and server package for I++ DME (Dimensional Measurement
 Equipment interface, VDMA 8722), the line-based TCP protocol used to control
 coordinate measuring machines (CMMs) and related equipment. Implements
