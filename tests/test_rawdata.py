@@ -11,6 +11,8 @@ import socket
 import struct
 from multiprocessing import shared_memory
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import pytest
 
@@ -64,13 +66,17 @@ async def _acquire_points(
     )
 
 
+def _path_from_file_url(url: str) -> Path:
+    return Path(url2pathname(urlparse(url).path))
+
+
 async def _read_points(client: IppDmeClient, name: str) -> tuple[tuple[float, float, float], ...]:
     (data,) = await client.call(CommandName.GET_RAW_DATA_FILE, String(name))
     (item,) = _items(data).values
     url = item.args[0]
     assert isinstance(url, String)
-    path = url.value.removeprefix("file://")
-    cloud_set = point_cloud_from_xml(Path(path).read_text())
+    path = _path_from_file_url(url.value)
+    cloud_set = point_cloud_from_xml(path.read_text())
     (point_set,) = cloud_set.point_clouds[0].point_sets
     return tuple((p.x, p.y, p.z) for p in point_set.points)
 
@@ -156,8 +162,8 @@ async def test_get_raw_data_file_writes_and_is_deletable(
     url = item.args[0]
     assert isinstance(url, String)
     assert url.value.startswith("file://")
-    path = url.value.removeprefix("file://")
-    assert path  # a real file was written
+    path = _path_from_file_url(url.value)
+    assert path.is_file()
 
     await started_client.call(CommandName.DEL_RAW_DATA_FILE, String("Acq1"))
 
