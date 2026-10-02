@@ -1,0 +1,7 @@
+The XML schema files in src/pyippdme/schemas/ are taken from Annexes E, F and G
+of VDMA 8722:2024-04 (I++ DME). They are not part of the original work of this
+package and are not covered by its license.
+
+(c) All rights reserved to VDMA e.V., Frankfurt/Main - Modification,
+amendment, editing, translation, copying and/or circulation only with
+permission in writing from VDMA e.V.
