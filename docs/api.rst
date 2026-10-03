@@ -118,3 +118,9 @@ API Reference
 
 .. automodule:: pyippdme.spy
    :members:
+
+.. automodule:: pyippdme.server.motion
+   :members:
+
+.. automodule:: pyippdme.server.surface
+   :members:

@@ -78,6 +78,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "one per line - a valid 'ippdme client --file' input, for replay",
     )
 
+    subparsers.add_parser(
+        "gui",
+        add_help=False,
+        help="virtual CMM with a visible digital twin in a Qt window (needs pyippdme[gui]); "
+        "run 'ippdme gui --help' for its options",
+    )
+
     tui_parser = subparsers.add_parser(
         "tui", help="full-screen terminal UI for sending commands to a server (needs pyippdme[tui])"
     )
@@ -181,6 +188,16 @@ async def _run_client(
         raise SystemExit(f"Connection failed: {exc}") from exc
 
 
+def _run_gui(argv: list[str]) -> None:
+    try:
+        from pyippdme.gui.app import main as gui_main
+    except ImportError as exc:
+        raise SystemExit(
+            "The GUI needs the optional 'gui' dependency group: pip install pyippdme[gui]"
+        ) from exc
+    raise SystemExit(gui_main(argv))
+
+
 def _run_tui(host: str | None, port: int, virtual: bool) -> None:
     try:
         from pyippdme.cli.tui import run
@@ -254,6 +271,10 @@ async def _run_spy(
 
 
 def main() -> None:
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "gui":
+        _run_gui(sys.argv[2:])
     parser = _build_parser()
     args = parser.parse_args()
     if args.command in ("client", "tui") and args.virtual and args.host is not None:

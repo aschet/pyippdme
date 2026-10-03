@@ -270,6 +270,129 @@ proprietary commands `BUILTIN_COMMANDS` has no way to know about).
 for a custom class subset, e.g. matching a particular
 `IppDmeServer(command_classes=[...])` configuration.
 
+## Digital twin and simulator window
+
+`VirtualCMM` stays the small, GUI-free simulation for the command line. For a
+simulation you can see, `pyippdme.twin` builds on the same protocol server and adds
+a physical model, and `pyippdme.gui` shows it in a Qt window. A client connects over
+TCP with the normal I++ DME protocol and gets the answers of that model.
+
+```bash
+pip install "pyippdme[gui]"          # PySide6 and OpenCASCADE (cadquery-ocp)
+ippdme gui --start --sample part.step
+```
+
+In the window you can load a sample from a STEP, IGES, STL or BREP file, place it on the
+table or the rotary table (position, rotation, "rest on table"), add box and cylinder
+fixtures, switch machine presets, change the playback speed, the measuring noise and the
+part temperature, jog by hand, and watch the protocol lines. Measured points and scan
+point clouds appear in the 3D view.
+
+What the twin simulates behind the protocol:
+
+- **Motion.** `GoTo`, `Step` and `PtMeas` take time with a trapezoidal speed profile (maximum
+  vector speed and acceleration of the machine), `AbortE()` stops them, and the machine
+  must be homed first (error 1011 otherwise). A target outside the machine volume is
+  rejected with 1008.
+- **Collisions.** The stylus, probe holder, table, rotary table, the moving machine parts,
+  the sample and fixtures are checked against each other with exact OpenCASCADE
+  distances. A collision stops the machine where it hit and reports 2504. During
+  `PtMeas` the tip is the sensor, so touching the part is not a collision.
+- **Probing.** `PtMeas` rays hit the exact B-rep of the CAD sample, with a measuring
+  error that follows the machine's MPE_E = A + L/K and MPE_P (a third of the MPE as one
+  standard deviation) and a thermal expansion error for a part that is not at 20 °C.
+- **Scanning.** `ScanOnLine` and the other scanning commands run at the scanning speed
+  and show the probe moving; line scans follow the CAD surface along the probing
+  direction when it is within a few millimetres.
+- **Raw data.** `DataAcquire` is answered by a laser line scanner (`LineScanner`) that
+  ray-casts the CAD sample with noise and dropouts, for `SingleShot`, `MultiShot` and
+  `Sweep`.
+- **Tools.** The four tools of the catalog have a physical stylus (ball, stem, holder)
+  that is drawn and used for collisions; `ChangeTool` changes it, and `AlignTool` turns
+  its stem.
+
+### Machines from STEP files
+
+The machine is a set of STEP bodies that move with the axes. Export the default machine to
+see the layout, edit or replace the files, and load the directory again:
+
+```python
+from pyippdme.twin import MachineModel
+
+MachineModel.default("bridge-900", rotary=True).export("my_cmm")   # machine.toml + STEP files
+machine = MachineModel.from_directory("my_cmm")
+```
+
+```toml
+[machine]
+preset = "bridge-700"          # start from a preset, then override
+travel = [900, 1200, 700]
+max_speed = 520
+acceleration = 1200
+[machine.accuracy]
+a_um = 1.6
+k = 350
+[machine.rotary]
+origin = [450, 600, -10]       # a rotary table, centre on its top
+speed = 90
+
+[[component]]
+name = "table"
+step = "granite.step"           # no step: the generated body is used
+[[component]]
+name = "bridge"
+step = "bridge.step"
+moves_with = ["y"]
+[[component]]
+name = "carriage"
+step = "carriage.step"
+moves_with = ["x", "y"]
+[[component]]
+name = "quill"
+step = "quill.step"
+moves_with = ["x", "y", "z"]
+[[component]]
+name = "turntable"
+step = "turntable.step"
+rotates = true
+```
+
+A single STEP assembly works as well (`MachineModel.from_step`, or *Load machine…*): its parts
+are recognised by name (table/granite, bridge/portal, carriage/slide, quill/spindle/ram,
+rotary/turntable). Travel ranges and the machine zero that you do not give are estimated
+from the geometry (`machine.spec.derived` lists what was estimated), so check them.
+Coordinates are machine coordinates: origin at the home position, Z up, the table
+surface 10 mm below zero.
+
+The presets give representative numbers for bridge machines (measuring range, MPE_E =
+A + L/K, axis speed and acceleration in the range of public manufacturer data sheets);
+they are not a model of one specific machine. Take the numbers of your machine from its
+data sheet.
+
+### Your own simulation in the window
+
+The window shows anything that satisfies `pyippdme.twin.view.SimulationView` (a
+snapshot, a list of meshes with poses, and listeners). What answers the client is
+a set of seams of the protocol server, each a small Protocol that you can implement
+yourself and pass to `IppDmeServer` or `VirtualCMM`:
+
+| Seam | Used by | Without it |
+| --- | --- | --- |
+| `pyippdme.server.motion.MotionModel` | every move: time, limits, collisions | moves are instant |
+| `pyippdme.server.surface.SampleSurface` | `PtMeas` | the commanded point is reported |
+| `pyippdme.server.surface.RawSensor` | `DataAcquire` | points are made up from the request |
+| `pyippdme.server.backend.MachineBackend` | scanning commands | nominal path |
+
+`DigitalTwin.create_server()` shows how the twin wires them. `pyippdme.twin.host.ServerHost`
+runs a server on a background thread so that a GUI keeps its main thread.
+
+Limits of the twin: the 3D view is a software renderer without OpenGL, so very large meshes
+are thinned while the camera moves; the tool catalog is the fixed set of
+`pyippdme.simulation.classes.tool_class.TOOL_CATALOG`; homing is instant; stylus bending,
+probe pre-travel, lobing and temperature of the machine itself are not modelled; the
+bridge and carriage are only checked against the sample and fixtures, not against the
+stylus.
+
 ## Deviations and open points
 
 Where this package departs from VDMA 8722:2024-04, or has to guess:
