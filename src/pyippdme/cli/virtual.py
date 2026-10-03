@@ -27,7 +27,7 @@ from pyippdme.server.registry import CommandRegistry
 from pyippdme.simulation import DEFAULT_COMMAND_CLASSES
 from pyippdme.simulation.surface import CompositeSurface, parse_surface
 from pyippdme.simulation.virtual_cmm import VirtualCMM
-from pyippdme.types.csy import CsyStore
+from pyippdme.types.csy import CsyStore, InMemoryCsyStore
 
 ServerFactory = Callable[[Network], IppDmeServer[Any]]
 
@@ -234,4 +234,5 @@ def create_embedded(network: Network) -> IppDmeServer[Any]:
     """Create the in-process machine of ``--virtual``: as configured, or the minimal one."""
     if _factory is not None:
         return _factory(network)
-    return VirtualCMM(network=network)
+    # A try-out machine does not leave saved coordinate systems in the user's home directory.
+    return VirtualCMM(network=network, csy_store=InMemoryCsyStore())

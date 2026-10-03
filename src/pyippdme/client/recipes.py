@@ -15,17 +15,22 @@ Each function returns the text of one command (or the few commands a task needs,
 from __future__ import annotations
 
 from pyippdme.client import builders
-from pyippdme.protocol.ast import Method, String
+from pyippdme.protocol.ast import BasicName, Method, String
+from pyippdme.types.csy import CoordinateTransform
 from pyippdme.types.vec3 import Vec3
 
 __all__ = [
     "AXIS_DIRECTIONS",
     "SPEED_PARAMETERS",
     "change_tool_line",
+    "get_csy_transformation_line",
     "goto_line",
+    "named_csy_line",
     "pt_meas_line",
     "scan_circle_lines",
     "scan_line_lines",
+    "set_coord_system_line",
+    "set_csy_transformation_line",
     "set_tool_line",
     "speed_line",
     "speed_lines",
@@ -121,6 +126,30 @@ def set_tool_line(name: str) -> str:
     return _line("SetTool", (String(name),))
 
 
+def set_coord_system_line(csy: str) -> str:
+    """Choose the coordinate system the client works in (6.5.2)."""
+    return _line("SetCoordSystem", (BasicName(csy),))
+
+
+def set_csy_transformation_line(
+    csy: str, offset: Vec3, theta: float, psi: float, phi: float
+) -> str:
+    """Place ``csy`` relative to its parent: offset and the Euler angles of 6.5.1."""
+    transform = CoordinateTransform(*offset, theta, psi, phi)
+    return _line(
+        "SetCsyTransformation", (BasicName(csy), *builders.set_csy_transformation(transform))
+    )
+
+
+def get_csy_transformation_line(csy: str) -> str:
+    return _line("GetCsyTransformation", (BasicName(csy),))
+
+
+def named_csy_line(command: str, name: str) -> str:
+    """``SaveActiveCoordSystem``, ``LoadCoordSystem`` or ``DeleteCoordSystem`` for ``name``."""
+    return _line(command, (String(name),))
+
+
 def speed_lines(block: str, speed: float | None, accel: float | None) -> list[str]:
     """Set the speed and acceleration of a parameter block (see :data:`SPEED_PARAMETERS`)."""
     lines = []
@@ -141,6 +170,7 @@ def status_lines() -> list[str]:
     return [
         _line("Get", builders.get("X", "Y", "Z")),
         "GetXtdErrStatus()",
+        "GetCoordSystem()",
         "IsUserEnabled()",
         _line("GetProp", builders.get_prop("Tool.Name")),
     ]

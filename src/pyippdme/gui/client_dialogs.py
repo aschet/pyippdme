@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from pyippdme.client import optical, recipes
 from pyippdme.gui.icons import load_icon
+from pyippdme.types.csy import CSY_CHAIN, LIVE_TRANSFORM_NAMES
 from pyippdme.types.vec3 import Vec3
 
 PositionProvider = Callable[[], Vec3 | None]
@@ -370,6 +371,120 @@ class ToolDialog(TaskDialog):
             if self.change.isChecked()
             else recipes.set_tool_line(name)
         ]
+
+
+class CoordSystemDialog(TaskDialog):
+    """Coordinate systems: choose the one to work in, place one, save and load named ones."""
+
+    #: The client asks the machine for the named systems / the placement of ``csy``.
+    names_requested = Signal()
+    placement_requested = Signal(str)
+
+    ACTIONS = (
+        ("select", "Work in a coordinate system"),
+        ("place", "Place a coordinate system"),
+        ("save", "Save the active part system as ..."),
+        ("load", "Load a saved system"),
+        ("delete", "Delete a saved system"),
+    )
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__("Coordinate systems", "csy", parent)
+        self.action = QComboBox()
+        for key, label in self.ACTIONS:
+            self.action.addItem(label, key)
+        self.csy = QComboBox()
+        self.csy.addItems(CSY_CHAIN)
+        self.target = QComboBox()
+        self.target.addItems(LIVE_TRANSFORM_NAMES)
+        self.target.currentTextChanged.connect(lambda _: self._placement_changed())
+        self.offset = VectorEdit()
+        self.theta = _spin(0.0, 180.0, 0.0)
+        self.psi = _spin(-360.0, 360.0, 0.0)
+        self.phi = _spin(-360.0, 360.0, 0.0)
+        for box in (self.theta, self.psi, self.phi):
+            box.setSuffix(" °")
+        self.read = QPushButton(load_icon("refresh"), "Read it from the machine")
+        self.read.clicked.connect(lambda: self.placement_requested.emit(self.target.currentText()))
+        self.saved = QComboBox()
+        self.saved.setEditable(True)
+        self.reload = QPushButton(load_icon("refresh"), "Ask for the saved systems")
+        self.reload.clicked.connect(self.names_requested.emit)
+        self.form.addRow("Action", self.action)
+        self.form.addRow("Work in", self.csy)
+        self.form.addRow("Place", self.target)
+        self.form.addRow("Offset X, Y, Z", self.offset)
+        self.form.addRow("Theta", self.theta)
+        self.form.addRow("Psi", self.psi)
+        self.form.addRow("Phi", self.phi)
+        self.form.addRow(self.read)
+        self.form.addRow("Name", self.saved)
+        self.form.addRow(self.reload)
+        self.action.currentIndexChanged.connect(lambda _: self._action_changed())
+        _connect_all(
+            self, self.action, self.csy, self.target, self.offset, self.theta, self.psi, self.phi
+        )
+        self.saved.editTextChanged.connect(lambda _: self.refresh())
+        self._action_changed()
+
+    def _action_changed(self) -> None:
+        key = self.action.currentData()
+        rows = {
+            self.csy: key == "select",
+            self.target: key == "place",
+            self.offset: key == "place",
+            self.theta: key == "place",
+            self.psi: key == "place",
+            self.phi: key == "place",
+            self.read: key == "place",
+            self.saved: key in ("save", "load", "delete"),
+            self.reload: key in ("load", "delete"),
+        }
+        for widget, shown in rows.items():
+            widget.setVisible(shown)
+            label = self.form.labelForField(widget)
+            if label is not None:
+                label.setVisible(shown)
+        self.refresh()
+
+    def _placement_changed(self) -> None:
+        self.refresh()
+
+    def set_names(self, names: list[str]) -> None:
+        """Show the saved systems the machine listed."""
+        self.saved.clear()
+        self.saved.addItems(names)
+
+    def set_placement(self, offset: Vec3, theta: float, psi: float, phi: float) -> None:
+        """Show the placement the machine reported for the chosen system."""
+        self.offset.set_value(offset)
+        self.theta.setValue(theta)
+        self.psi.setValue(psi)
+        self.phi.setValue(phi)
+
+    def lines(self) -> list[str]:
+        key = self.action.currentData()
+        if key == "select":
+            return [recipes.set_coord_system_line(self.csy.currentText())]
+        if key == "place":
+            return [
+                recipes.set_csy_transformation_line(
+                    self.target.currentText(),
+                    self.offset.value(),
+                    self.theta.value(),
+                    self.psi.value(),
+                    self.phi.value(),
+                )
+            ]
+        name = self.saved.currentText().strip()
+        if not name:
+            raise ValueError("give the name of the saved system")
+        command = {
+            "save": "SaveActiveCoordSystem",
+            "load": "LoadCoordSystem",
+            "delete": "DeleteCoordSystem",
+        }[key]
+        return [recipes.named_csy_line(command, name)]
 
 
 class SpeedDialog(TaskDialog):

@@ -161,3 +161,45 @@ def test_dialog_shows_a_failure_and_not_connected_is_explained(window: ClientWin
     assert move.outcome.text().startswith("Failed")
     assert "Not connected" in window.log.toPlainText()
     assert not window.abort_button.isEnabled()
+
+
+def test_coordinate_system_dialog_selects_places_and_reads_back(window: ClientWindow) -> None:
+    window.connect_virtual()
+    _wait(lambda: window.session_led.state == "on")
+    _wait(lambda: window.csy_label.text() == "CSY: MachineCsy")
+    dialog = window.open_dialog("csy")
+    # Place PartCsy, then work in it.
+    dialog.action.setCurrentIndex(dialog.action.findData("place"))  # type: ignore[attr-defined]
+    dialog.target.setCurrentText("PartCsy")  # type: ignore[attr-defined]
+    dialog.offset.set_value((10.0, 20.0, 30.0))  # type: ignore[attr-defined]
+    dialog.theta.setValue(15.0)  # type: ignore[attr-defined]
+    assert "SetCsyTransformation(PartCsy" in dialog.preview.text()
+    dialog.run_button.click()
+    _wait(lambda: dialog.outcome.text().startswith("Done"))
+    dialog.action.setCurrentIndex(dialog.action.findData("select"))  # type: ignore[attr-defined]
+    dialog.csy.setCurrentText("PartCsy")  # type: ignore[attr-defined]
+    dialog.run_button.click()
+    _wait(lambda: window.csy_label.text() == "CSY: PartCsy")
+    # Read the placement back from the machine into the form.
+    dialog.offset.set_value((0.0, 0.0, 0.0))  # type: ignore[attr-defined]
+    dialog.placement_requested.emit("PartCsy")  # type: ignore[attr-defined]
+    _wait(lambda: dialog.offset.value() == (10.0, 20.0, 30.0))  # type: ignore[attr-defined]
+    assert dialog.theta.value() == 15.0  # type: ignore[attr-defined]
+    # Save the active part system under a name and see it listed.
+    dialog.action.setCurrentIndex(dialog.action.findData("save"))  # type: ignore[attr-defined]
+    dialog.saved.setEditText("fixture-1")  # type: ignore[attr-defined]
+    dialog.run_button.click()
+    _wait(lambda: dialog.outcome.text().startswith("Done"))
+    dialog.names_requested.emit()  # type: ignore[attr-defined]
+    _wait(lambda: dialog.saved.findText("fixture-1") >= 0)  # type: ignore[attr-defined]
+
+
+def test_the_log_shows_quotes_as_they_are(window: ClientWindow) -> None:
+    window.connect_virtual()
+    _wait(lambda: window.session_led.state == "on")
+    window.send('SaveActiveCoordSystem("quoted")')
+    window.send("EnumCoordSystems()")
+    _wait(lambda: "#3 done" in window.log.toPlainText())
+    text = window.log.toPlainText()
+    assert '"quoted"' in text
+    assert "&quot;" not in text

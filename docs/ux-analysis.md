@@ -21,7 +21,7 @@ design.
 | Dialogs closed over, or left open, without telling whether the run worked. | The user looked at the log to find out. | The dialog shows Running ..., then Done with the time, or Failed with the server's error. Run is disabled while it runs. |
 | Three docks on the right that were empty most of the time. | Wasted space and no hint what fills them. | One Results dock with tabs: points, point cloud (opens after an acquisition), last response. |
 | An empty window after start. | No hint what to do first. | The log starts with the two ways to begin; sending while not connected explains how to connect instead of failing silently. |
-| No keyboard use. | Repeated tasks need the mouse. | F5 connect, Ctrl+Shift+V virtual CMM, Ctrl+1..7 dialogs, Ctrl+L command line, Esc abort. |
+| No keyboard use. | Repeated tasks need the mouse. | F5 connect, Ctrl+Shift+V virtual CMM, Ctrl+1..8 dialogs, Ctrl+L command line, Esc abort. |
 
 Not changed on purpose: the command line stays, as the protocol is the product; the dialogs only
 build lines for it, and the preview shows each line before it runs.

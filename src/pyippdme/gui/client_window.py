@@ -138,7 +138,8 @@ def _names(payloads: list[DataPayload]) -> list[str]:
     names: list[str] = []
     for payload in payloads:
         if isinstance(payload, StringValue | NameValue):
-            names.append(str(payload.value))
+            value = payload.value
+            names.append(str(getattr(value, "value", value)))
         elif isinstance(payload, Items):
             for item in payload.values:
                 names.extend(str(a.value) for a in item.args if isinstance(a, String | BasicName))
@@ -264,6 +265,13 @@ class ClientWindow(QMainWindow):
                 "Tools", "tool", lambda: self.open_dialog("tool"), "Change or select tool", "Ctrl+5"
             ),
             self._action(
+                "Coordinates",
+                "csy",
+                lambda: self.open_dialog("csy"),
+                "Coordinate systems: choose, place, save and load",
+                "Ctrl+8",
+            ),
+            self._action(
                 "Speeds",
                 "speed",
                 lambda: self.open_dialog("speed"),
@@ -332,6 +340,8 @@ class ClientWindow(QMainWindow):
         self.homed_label = Led("", "Whether the machine is homed")
         self.user_led = Led("User disabled", "EnableUser lets the program move the machine")
         self.busy_led = Led("Ready", "Commands that are still running")
+        self.csy_label = QLabel("")
+        self.csy_label.setToolTip("The coordinate system the positions are in (SetCoordSystem)")
         self.tool_label = QLabel("")
         self.position_label = QLabel("X -   Y -   Z -")
         mono(self.position_label, 15)
@@ -346,6 +356,7 @@ class ClientWindow(QMainWindow):
         ):
             layout.addWidget(widget)
         layout.addWidget(separator())
+        layout.addWidget(self.csy_label)
         layout.addWidget(self.tool_label)
         layout.addStretch(1)
         layout.addWidget(self.position_label)
@@ -506,6 +517,7 @@ class ClientWindow(QMainWindow):
         self.user_led.set_state("off", "User disabled")
         self.busy_led.set_state("off", "Ready")
         self.tool_label.clear()
+        self.csy_label.clear()
         self.position_label.setText("X -   Y -   Z -")
 
     # -- sending ----------------------------------------------------------------------------
@@ -588,7 +600,10 @@ class ClientWindow(QMainWindow):
         colors = {"error": "#e74c3c", "ok": "#27ae60", "info": "#7f8c8d", "cmd": "#2f6fb0"}
         color = colors.get(kind)
         escaped = html.escape(text)
-        self.log.append(f'<span style="color:{color}">{escaped}</span>' if color else escaped)
+        # Always rich text: Qt shows a plain string that has no tags with its entities unescaped
+        # (a quoted name came out as ``&quot;``).
+        style = f' style="color:{color}"' if color else ""
+        self.log.append(f"<span{style}>{escaped}</span>")
         document = self.log.document()
         if document is not None and document.blockCount() > _LOG_LIMIT:
             self.log.clear()
@@ -665,6 +680,8 @@ class ClientWindow(QMainWindow):
     def _on_data(self, key: tuple[int, int], text: str, payload: DataPayload, status: bool) -> None:
         if key in self._queries:
             self._collected.setdefault(key, []).append(payload)
+        if isinstance(payload, StringValue | NameValue) and text.startswith("GetCoordSystem"):
+            self.csy_label.setText(f"CSY: {payload.value}")
         if isinstance(payload, Items):
             try:
                 report = report_from_payload(payload)
@@ -757,6 +774,8 @@ class ClientWindow(QMainWindow):
                 dialog = dialogs.ScanLineDialog(self._current_position, self)
             elif name == "arc":
                 dialog = dialogs.ScanArcDialog(self._current_position, self)
+            elif name == "csy":
+                dialog = self._csy_dialog()
             elif name == "speed":
                 dialog = dialogs.SpeedDialog(self)
             elif name == "optical":
@@ -774,6 +793,34 @@ class ClientWindow(QMainWindow):
         dialog.activateWindow()
         if isinstance(dialog, dialogs.ToolDialog) and not dialog.tools.count():
             dialog.refresh_requested.emit()
+        return dialog
+
+    def _csy_dialog(self) -> dialogs.CoordSystemDialog:
+        dialog = dialogs.CoordSystemDialog(self)
+        dialog.names_requested.connect(
+            lambda: self.query("EnumCoordSystems()", lambda data: dialog.set_names(_names(data)))
+        )
+
+        def show(csy: str) -> None:
+            def got(data: list[DataPayload]) -> None:
+                for payload in data:
+                    if isinstance(payload, Items):
+                        values = dict(report_from_payload(payload))
+
+                        def number(key: str, values: dict[str, Any] = values) -> float:
+                            value = values.get(key)
+                            return float(value) if isinstance(value, int | float) else 0.0
+
+                        dialog.set_placement(
+                            (number("X0"), number("Y0"), number("Z0")),
+                            number("Theta"),
+                            number("Psi"),
+                            number("Phi"),
+                        )
+
+            self.query(recipes.get_csy_transformation_line(csy), got)
+
+        dialog.placement_requested.connect(show)
         return dialog
 
     def _optical_dialog(self) -> dialogs.OpticalDialog:
