@@ -282,7 +282,7 @@ def test_teach_in_events_reach_the_client(window: MainWindow) -> None:
     lo, _ = window.twin.objects[0].world_bounds(window.twin.machine.rotary_pose(0.0))
     top = float(lo[2]) + 30.0
 
-    async def session() -> list[object]:
+    async def session() -> list[str]:
         machine = await IppDmeMachine.connect("127.0.0.1", port)
         await machine.start_session()
         await machine.dme.home()
@@ -292,7 +292,7 @@ def test_teach_in_events_reach_the_client(window: MainWindow) -> None:
         window.teach_panel.press("Done")
         window.teach_panel.pick()
         window.teach_panel.clearance()
-        got = []
+        got: list[str] = []
         async for event in events:
             got.append(event.data.to_wire())
             if len(got) == 3:
