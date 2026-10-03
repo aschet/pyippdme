@@ -369,6 +369,10 @@ preset = "bridge-700"          # start from a preset, then override
 travel = [900, 1200, 700]
 max_speed = 520
 acceleration = 1200
+table_kind = "fixed"           # "moving-y": the bridge stands, the table carries Y
+rack_side = "back"             # back, front, left or right edge of the table
+rack_inset = 45                # mm from that edge of the travel range; negative is outside
+# rack_origin = [100, 650, 10] # or the first port at an explicit position
 [machine.accuracy]
 a_um = 1.6
 k = 350
@@ -403,6 +407,14 @@ rotary/turntable). Travel ranges and the machine zero that you do not give are e
 from the geometry (`machine.spec.derived` lists what was estimated), so check them.
 Coordinates are machine coordinates: origin at the home position, Z up, the table
 surface 10 mm below zero.
+
+With `table_kind = "moving-y"` (preset `moving-table-600`) the bridge stands still in the 3D
+view and the table, with the rack, rotary table, fixtures, parts and measured points on it,
+slides along Y. Measuring coordinates and collisions stay in the frame of the table, so
+nothing changes for the client. In a machine file, `moves_with` then names what moves in
+the world: the table and what stands on it carry `y`, the carriage `x`, the quill `x` and `z`.
+The tool rack stands at `rack_side` (a row of ports along that edge) or at `rack_origin`.
+The default positions are my choice, not taken from a manufacturer's layout.
 
 The presets give representative numbers for bridge machines (measuring range, MPE_E =
 A + L/K, axis speed and acceleration in the range of public manufacturer data sheets);
@@ -450,7 +462,16 @@ Where this package departs from VDMA 8722:2024-04, or has to guess:
   along each axis, which Table 117 does not say. Tool collections are listed with the kinds
   `Collection` and `Tool` (Table 125), and paths join node names with `.` as in `PartXYZ.Rear`.
 - `Tool.A()`, `B()` and `C()` are valid only inside `Get`; written as commands they are
-  answered with 0508 (Table 113). `OnReport` is not implemented.
+  answered with 0508 (Table 113). The standard has no `OnReport` command.
+- `UseSmallestAngletoAlignTool` is written both ways in the standard; both are accepted.
+  With the flag set, an alignment that turns an angle by 180 degrees or more fails with 2500.
+- A scan starts with the implicit `PtMeas` of 6.13 (all `PtMeasPar`, `Retract` 0) on a server
+  with a motion model: the machine moves to the approach position and probes the start
+  point, so a scan over empty space fails with 1006. The twin also stops a scan with 2504
+  when the stylus or the probe body would touch the part; this check is not done for the
+  unknown-contour scans.
+- The rotary table takes the shortest way to `R(r)`; at exactly 180 degrees it turns in the
+  positive direction.
 - `GetXtdErrStatus()` reports active errors as `ActiveError()` and `Severity()` data
   lines. Table 15 can also be read as asking for error responses.
 - `GetChangeToolAction()` answers `Argument(Switch),X(0),Y(0),Z(0)`. The standard

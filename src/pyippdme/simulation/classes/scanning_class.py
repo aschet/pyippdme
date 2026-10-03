@@ -97,6 +97,7 @@ does not change the stream.
 
 from __future__ import annotations
 
+import math
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
@@ -119,6 +120,7 @@ from pyippdme.server._util import (
 from pyippdme.server.backend import ContourBackend, MachineBackend
 from pyippdme.server.contour import ContourConstraint, ContourScan, ContourStop
 from pyippdme.server.registry import CommandRegistry, HandlerResult
+from pyippdme.simulation.classes.cartcmm_class import implicit_pt_meas
 from pyippdme.simulation.classes.tool_class import (
     require_measuring_tool,
     tool_alignment_numbers,
@@ -612,11 +614,23 @@ async def _scan_on_curve(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     return _stream()
 
 
+def _surface_direction(center: Vec3, start: Vec3, axis: Vec3, sfa_deg: float) -> Vec3:
+    """Return the direction from the surface to the probe at the start of a circle or helix.
+
+    The surface angle ``sfa`` turns the radial direction towards the axis: 0 is the outside of
+    a cylinder (the probe stands outside), 180 the inside, 90 and 270 a plane.
+    """
+    radial = sub(start, center)
+    radial = normalize(sub(radial, scale(axis, dot(radial, axis))))
+    angle = math.radians(sfa_deg)
+    return normalize(add(scale(radial, math.cos(angle)), scale(axis, math.sin(angle))))
+
+
 async def _scan_on_circle(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     values = positional_numbers(
         args, CommandName.SCAN_ON_CIRCLE, *argument_count_bounds(_SCAN_ON_CIRCLE_PARAMS)
     )
-    cx, cy, cz, sx, sy, sz, i, j, k, delta, _sfa, step_w = values[:12]
+    cx, cy, cz, sx, sy, sz, i, j, k, delta, sfa, step_w = values[:12]
     # RT (values[12], if present) is accepted but ignored: rotary-table motion is not simulated.
     center: Vec3 = (cx, cy, cz)
     start: Vec3 = (sx, sy, sz)
@@ -636,6 +650,7 @@ async def _scan_on_circle(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult
     ctx.state.mover.user_enabled = False
 
     async def _stream() -> AsyncIterator[NumericData]:
+        await implicit_pt_meas(ctx, start, _surface_direction(center, start, unit_normal, sfa))
         async for point in backend.scan_circle(center, start, normal, delta, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
             yield NumericData(_report_values(ctx, point, unit_normal, CommandName.SCAN_ON_CIRCLE))
@@ -669,6 +684,7 @@ async def _scan_on_helix(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     ctx.state.mover.user_enabled = False
 
     async def _stream() -> AsyncIterator[NumericData]:
+        await implicit_pt_meas(ctx, start, _surface_direction(center, start, unit_normal, sfa))
         async for point in backend.scan_helix(
             center, start, normal, delta, step_w, pitch, ctx.cancel
         ):
@@ -702,6 +718,7 @@ async def _scan_on_line(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     ctx.state.mover.user_enabled = False
 
     async def _stream() -> AsyncIterator[NumericData]:
+        await implicit_pt_meas(ctx, start, unit_normal)
         async for point in backend.scan_line(start, end, normal, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
             yield NumericData(_report_values(ctx, point, unit_normal, CommandName.SCAN_ON_LINE))
@@ -758,6 +775,8 @@ def _contour_stream(
         reference = (0.0, 0.0, 1.0)
 
     async def _stream() -> AsyncIterator[NumericData]:
+        if norm(scan.probe) > 0.0:
+            await implicit_pt_meas(ctx, scan.start, normalize(scan.probe))
         async for point in backend.scan_contour(scan, ctx.cancel):
             ctx.state.cart_cmm.position = point
             yield NumericData(_report_values(ctx, point, reference, cause))

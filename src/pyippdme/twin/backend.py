@@ -11,13 +11,16 @@ import time
 from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING
 
+from pyippdme.protocol.errors import ErrorCode, ErrorSeverity
 from pyippdme.server.backend import CancellationToken
 from pyippdme.server.contour import ContourConstraint, ContourScan, ContourStop, trace_contour
+from pyippdme.server.motion import MotionError
 from pyippdme.simulation.backend import SimulatedBackend
 from pyippdme.types.vec3 import Vec3, add, norm, normalize, scale, sub
 
 if TYPE_CHECKING:
     from pyippdme.twin.twin import DigitalTwin
+    from pyippdme.types.csy import CsyContext
 
 #: How far from the nominal path a probe still finds the surface to follow (mm).
 _FOLLOW_RANGE = 6.0
@@ -62,7 +65,8 @@ class TwinBackend:
                     return
                 twin.check_ready("Scan")
                 nominal = twin.to_machine(nominal, context)
-                measured = self._follow(nominal, directions(nominal))
+                measured, unit = self._follow(nominal, directions(nominal))
+                self._check_collision(measured, unit, context)
                 if previous is not None and twin.time_scale > 0.0:
                     due = max(norm(sub(measured, previous)) / speed, interval) / twin.time_scale
                     wait = due - (time.monotonic() - last)
@@ -77,10 +81,34 @@ class TwinBackend:
             if batch:
                 twin.record_scan_points(batch, "scanning")
 
-    def _follow(self, nominal: Vec3, directions: tuple[Vec3, ...] | None) -> Vec3:
+    def _check_collision(self, point: Vec3, unit: Vec3 | None, context: CsyContext) -> None:
+        """Stop the scan if the stylus or the probe body touches anything but the scanned point."""
+        twin = self._twin
+        if unit is None:
+            return
+        offset = scale(unit, twin.toolkit.spec(twin.tool_name()).ball_radius + 0.05)
+        with twin.lock:
+            hits, _ = twin._collisions(point, twin.snapshot().rotary, twin.tool_name(), offset)
+        if hits:
+            what = sorted(hits)[0]
+            twin.report_collision(what, point)
+            raise twin.client_error(
+                MotionError(
+                    ErrorSeverity.CRITICAL,
+                    ErrorCode.COLLISION,
+                    "Scan",
+                    f"Collision with {what}",
+                    point,
+                ),
+                context,
+            )
+
+    def _follow(
+        self, nominal: Vec3, directions: tuple[Vec3, ...] | None
+    ) -> tuple[Vec3, Vec3 | None]:
         twin = self._twin
         if not directions:
-            return nominal
+            return nominal, None
         best: tuple[Vec3, float, Vec3] | None = None
         for direction in directions:
             if norm(direction) < 1e-9:
@@ -94,13 +122,13 @@ class TwinBackend:
             ):
                 best = (hit[0], hit[1], unit)
         if best is None:
-            return nominal
+            return nominal, None
         point, _, unit = best
         if twin.noise_enabled:
             spec = twin.toolkit.spec(twin.tool_name())
             placement = twin.placement(twin._pos)
             point = twin._apply_probe_errors(point, unit, spec, placement)
-        return point
+        return point, unit
 
     def scan_line(
         self, start: Vec3, end: Vec3, normal: Vec3, step_w: float, cancel: CancellationToken

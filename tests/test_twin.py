@@ -303,3 +303,57 @@ def test_picking_a_point_by_hand_records_the_touch() -> None:
     assert len(twin.contacts) == 1
     twin._pos = (0.0, 0.0, 300.0)
     assert twin.pick_point() is None  # nothing within reach
+
+
+async def test_a_scan_starts_with_an_implicit_pt_meas(
+    twin_machine: tuple[DigitalTwin, IppDmeMachine],
+) -> None:
+    twin, machine = twin_machine
+    await machine.dme.home()
+    lo, _ = twin.objects[0].world_bounds(twin.machine.rotary_pose(0.0))
+    top = twin.machine.spec.table_top_z + 30.0
+    start = (float(lo[0] + 5), float(lo[1] + 40), top + 2.0)
+    end = (float(lo[0] + 45), float(lo[1] + 40), top + 2.0)
+    contacts_before = len(twin.contacts)
+    points = [
+        p async for p in machine.scanning.scan_on_line(start, end, (0, 0, 1), step_width=10.0)
+    ]
+    assert points
+    assert len(twin.contacts) > contacts_before  # the start was touched before the scan
+
+
+async def test_a_scan_over_empty_space_fails_with_surface_not_found(
+    twin_machine: tuple[DigitalTwin, IppDmeMachine],
+) -> None:
+    _, machine = twin_machine
+    await machine.dme.home()
+    with pytest.raises(IppDmeServerError) as error:
+        _ = [
+            p
+            async for p in machine.scanning.scan_on_line(
+                (600.0, 600.0, 100.0), (650.0, 600.0, 100.0), (0, 0, 1), step_width=10.0
+            )
+        ]
+    assert "1006" in str(error.value)
+
+
+async def test_a_scan_stops_when_the_stylus_would_be_inside_the_part(
+    twin_machine: tuple[DigitalTwin, IppDmeMachine],
+) -> None:
+    from pyippdme.protocol.errors import ErrorCode
+    from pyippdme.server.motion import MotionError
+    from pyippdme.twin.backend import TwinBackend
+
+    twin, machine = twin_machine
+    await machine.dme.home()
+    lo, hi = twin.objects[0].world_bounds(twin.machine.rotary_pose(0.0))
+    x, y = float(lo[0] + 5), float(lo[1] + 40)  # where the earlier scan test finds the top face
+    hit = twin.cast((x, y, float(hi[2] + 40.0)), (0.0, 0.0, -1.0))
+    assert hit is not None
+    inside = (x, y, hit[0][2] - 5.0)
+    backend = TwinBackend(twin)
+    context = twin.csy_context()
+    backend._check_collision((x, y, hit[0][2] + 40.0), (0.0, 0.0, 1.0), context)  # free air
+    with pytest.raises(MotionError) as error:
+        backend._check_collision(inside, (0.0, 0.0, 1.0), context)
+    assert error.value.number == ErrorCode.COLLISION

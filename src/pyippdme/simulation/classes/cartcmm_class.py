@@ -426,6 +426,17 @@ def _parse_motion(
     )
 
 
+def shortest_rotary_end(start: float, target: float) -> float:
+    """Return the angle the rotary table runs to: it always takes the shortest way (6.23.1).
+
+    Exactly 180 degrees is left to the server; this one turns in the positive direction.
+    """
+    delta = (target - start) % 360.0
+    if delta > 180.0:
+        delta -= 360.0
+    return start + delta
+
+
 def _targets(ctx: Ctx, motion: _Motion, *, relative: bool) -> tuple[Vec3, float]:
     """Where a parsed move ends: the linear position and the rotary table angle."""
     locked = ctx.state.form_tester.locked_axes
@@ -479,7 +490,9 @@ async def _move(
             start=(x, y, z),
             end=target,
             rotary_start=rotary.position,
-            rotary_end=rotary_target,
+            rotary_end=rotary_target
+            if relative
+            else shortest_rotary_end(rotary.position, rotary_target),
             homed=ctx.state.homed,
             tool_name=ctx.state.tool.active_name,
             cancel=ctx.cancel,
@@ -490,10 +503,8 @@ async def _move(
             ctx.state.cart_cmm.position = error.stopped_at
             raise
     ctx.state.cart_cmm.position = target
-    # RotaryTable 6.23.1 R(r): "can only be invoked as an argument of a
-    # GoTo, PtMeas or ScanOnCurve command"; the shortest-distance-move and
-    # 180-degree-ambiguity rules it describes are a real motion controller's
-    # concern, not modeled by this simulation.
+    # RotaryTable 6.23.1 R(r): the table runs the shortest way (see ``shortest_rotary_end``,
+    # which the motion model gets); the state holds the angle the client asked for.
     rotary.position = rotary_target
     # Mover 6.7.1: GoTo(), Step() and PtMeas() implicitly execute DisableUser().
     ctx.state.mover.user_enabled = False
@@ -751,7 +762,20 @@ async def _pt_meas(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     return Items(pt_meas_fields(ctx, report_position, unit_direction, CommandName.PT_MEAS))
 
 
-async def _probe_with_motion(ctx: Ctx, motion: _Motion, nominal: Vec3, unit: Vec3) -> HandlerResult:
+async def implicit_pt_meas(ctx: Ctx, nominal: Vec3, unit: Vec3) -> None:
+    """Run the ``PtMeas`` that a scan starts with (6.13: all ``PtMeasPar`` but ``Retract`` 0).
+
+    Only a server with a motion model moves; one without just streams the scan points.
+    """
+    if ctx.motion is None:
+        return
+    motion = _Motion(x=nominal[0], y=nominal[1], z=nominal[2])
+    await _probe_with_motion(ctx, motion, nominal, unit, retract=0.0)
+
+
+async def _probe_with_motion(
+    ctx: Ctx, motion: _Motion, nominal: Vec3, unit: Vec3, *, retract: float | None = None
+) -> HandlerResult:
     """``PtMeas`` with a motion model: go to the approach position, then run the probing cycle.
 
     The machine moves to ``nominal + unit * approach`` like any other move; the motion model
@@ -773,7 +797,7 @@ async def _probe_with_motion(ctx: Ctx, motion: _Motion, nominal: Vec3, unit: Vec
             direction=unit,
             approach=approach,
             search=parameters["Search"].value + ctx.state.part.properties.get("Part.Search", 0.0),
-            retract=parameters["Retract"].value,
+            retract=parameters["Retract"].value if retract is None else retract,
             speed=parameters["Speed"].value,
             accel=parameters["Accel"].value,
             tool_name=ctx.state.tool.active_name,

@@ -37,10 +37,9 @@ catalog tool stays fixed/non-alignable, unchanged. Per explicit direction,
 this is deliberately a plausible-response simplification, not a real
 kinematic simulation: ``AlignTool()`` simply stores whatever orientation
 vector(s) it is given (normalized) as reached exactly, with no mechanism,
-travel time, or "would rotate more than 180 degrees" check behind it -
-``UseSmallestAngletoAlignTool()``'s flag is accordingly stored but inert
-(see :func:`_use_smallest_angle_to_align_tool`). ``A()``/``B()``/``C()``
-and ``CalcToolAngles()`` derive two (or three) angles from that stored
+travel time. Only ``UseSmallestAngletoAlignTool(1)`` is honoured: an
+alignment that turns an angle by 180 degrees or more then fails with ``2500``.
+``A()``/``B()``/``C()`` and ``CalcToolAngles()`` derive two (or three) angles from that stored
 vector via one documented, simple convention (:func:`tool_angles`)
 rather than any real tool-head geometry - there being no genuine multi-DOF
 kinematic tool model to derive them from otherwise. The same orientation is
@@ -395,6 +394,23 @@ def tool_alignment_numbers(ctx: Ctx, namespace: str, cause: str) -> tuple[float,
     return (*primary, *(secondary or ()))
 
 
+def _check_smallest_angle(
+    ctx: Ctx, cause: str, old: tuple[Vec3, Vec3 | None], new: tuple[Vec3, Vec3 | None]
+) -> None:
+    """``UseSmallestAngletoAlignTool(1)``: refuse an alignment that turns an axis 180 degrees."""
+    if not ctx.state.tool.use_smallest_angle:
+        return
+    old_a, old_b, _ = tool_angles(*old)
+    new_a, new_b, _ = tool_angles(*new)
+    if max(abs(new_a - old_a), abs(new_b - old_b)) >= 180.0:
+        raise ServerError(
+            ErrorSeverity.ERROR,
+            ErrorCode.MACHINE_LIMIT_ENCOUNTERED,
+            cause,
+            "An axis of the tool would rotate 180 degrees or more (UseSmallestAngletoAlignTool(1))",
+        )
+
+
 def apply_tool_orientation(
     ctx: Ctx,
     cause: str,
@@ -441,6 +457,7 @@ def apply_tool_orientation(
         new_b = current_b if b is None else (current_b + b if relative else b)
         new_primary = alignment_from_angles(new_a, new_b)
         new_secondary = None
+    _check_smallest_angle(ctx, cause, (primary, secondary), (new_primary, new_secondary))
     ctx.state.tool.alignment[tool_name] = (new_primary, new_secondary)
 
 
@@ -714,6 +731,12 @@ async def _align_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
         secondary = normalize(secondary_raw) if secondary_raw is not None else None
     except ValueError as exc:
         raise bad_argument(CommandName.ALIGN_TOOL, "i1,j1,k1/i2,j2,k2 must be non-zero") from exc
+    _check_smallest_angle(
+        ctx,
+        CommandName.ALIGN_TOOL,
+        tool_alignment(ctx, ctx.state.tool.active_name),
+        (primary, secondary),
+    )
     ctx.state.tool.alignment[ctx.state.tool.active_name] = (primary, secondary)
     # AlignTool() moves the machine, so (6.7.1) it implicitly executes DisableUser().
     ctx.state.mover.user_enabled = False
@@ -800,9 +823,7 @@ async def _use_smallest_angle_to_align_tool(ctx: Ctx, args: tuple[Argument, ...]
         raise bad_argument(
             CommandName.USE_SMALLEST_ANGLE_TO_ALIGN_TOOL, "Expected a single boolean"
         )
-    # Stored but inert: genuinely detecting "would rotate more than 180
-    # degrees" needs a real per-axis kinematic travel model this simulation
-    # doesn't have - see the module docstring.
+    # Modal; ``apply_tool_orientation`` raises 2500 for a rotation of 180 degrees or more.
     ctx.state.tool.use_smallest_angle = args[0].value != 0
     return None
 
@@ -874,6 +895,12 @@ def register(registry: CommandRegistry) -> None:
     )
     registry.register(
         CommandName.USE_SMALLEST_ANGLE_TO_ALIGN_TOOL,
+        _use_smallest_angle_to_align_tool,
+        arguments=_USE_SMALLEST_ANGLE_PARAMS,
+    )
+    # The standard writes the name both ways (Table 109 and its remarks): accept both.
+    registry.register(
+        "UseSmallestAngleToAlignTool",
         _use_smallest_angle_to_align_tool,
         arguments=_USE_SMALLEST_ANGLE_PARAMS,
     )

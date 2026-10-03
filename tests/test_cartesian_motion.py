@@ -162,3 +162,13 @@ async def test_a_zero_probing_vector_has_no_norm(started_client: IppDmeClient) -
     zero = NamedValue("IJK", (Number.of(0), Number.of(0), Number.of(0)))
     with pytest.raises(IppDmeServerError, match="1010"):
         await started_client.call(CommandName.PT_MEAS, NamedValue("X", (Number.of(1),)), zero)
+
+
+def test_the_rotary_table_takes_the_shortest_way() -> None:
+    from pyippdme.simulation.classes.cartcmm_class import shortest_rotary_end
+
+    assert shortest_rotary_end(0.0, 350.0) == pytest.approx(-10.0)
+    assert shortest_rotary_end(350.0, 20.0) == pytest.approx(380.0)
+    assert shortest_rotary_end(10.0, 100.0) == pytest.approx(100.0)
+    assert shortest_rotary_end(0.0, 180.0) == pytest.approx(180.0)  # the server decides: positive
+    assert shortest_rotary_end(0.0, 360.0) == pytest.approx(0.0)
