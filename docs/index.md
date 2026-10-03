@@ -301,15 +301,55 @@ What the twin simulates behind the protocol:
 - **Probing.** `PtMeas` rays hit the exact B-rep of the CAD sample, with a measuring
   error that follows the machine's MPE_E = A + L/K and MPE_P (a third of the MPE as one
   standard deviation) and a thermal expansion error for a part that is not at 20 °C.
-- **Scanning.** `ScanOnLine` and the other scanning commands run at the scanning speed
-  and show the probe moving; line scans follow the CAD surface along the probing
-  direction when it is within a few millimetres.
-- **Raw data.** `DataAcquire` is answered by a laser line scanner (`LineScanner`) that
-  ray-casts the CAD sample with noise and dropouts, for `SingleShot`, `MultiShot` and
-  `Sweep`.
-- **Tools.** The four tools of the catalog have a physical stylus (ball, stem, holder)
-  that is drawn and used for collisions; `ChangeTool` changes it, and `AlignTool` turns
-  its stem.
+- **Probing cycle.** `PtMeas` follows Figure 29: move to the approach point, slow down to
+  the probing speed without stopping, search at constant speed until the ball touches the
+  surface (a tilted surface triggers later along the path), overtravel `v²/2a`, compensate the
+  ball radius along the probing direction and retract at the `GoTo` speed. Nothing found within
+  the search distance is error 1006. Speeds and accelerations come from `GoToPar`,
+  `PtMeasPar` and `ScanPar`.
+- **Scanning.** `ScanOnLine`, `ScanOnCircle` and `ScanOnHelix` run at the scanning speed
+  and follow the CAD surface. The five unknown-contour scans (`ScanInPlaneEndIs...`,
+  `ScanInCylEndIs...`, Figures 35-39) trace the real surface in a scanning plane or cylinder
+  until the stop sphere, plane or cylinder is reached; the algorithm is
+  `pyippdme.server.contour.trace_contour`.
+- **Optical sensors.** `LaserLine`, `LaserPoint`, `AreaScanner` and `Camera2D` are sampled from a
+  depth buffer of the placed CAD parts (`pyippdme.twin.depthbuffer`, `pyippdme.twin.optical`):
+  depth gating, dropouts at steep incidence, triangulation shadows, flying pixels at edges and
+  noise that grows with distance. Points can be raw scan lines (`RSL`), gridded (`GSL`) or
+  averaged on a grid (`QSP`), and `pyippdme.twin.pointtypes.qualified_edge_point` builds the
+  `QEP` of Figure 41. `DataAcquire` supports `SingleShot`, `MultiShot` and `Sweep`.
+- **Tools and heads.** Tools are data (`pyippdme.twin.spec.ToolSpec`, about 35 fields): head
+  (fixed, indexing in 7.5° steps or continuous 5-axis), probe, extension, stylus, tip
+  (including star tips) and measuring mode (`touch`, `head_touch`, `scanning`, `laser`,
+  `point_laser`, `area`, `camera`). Every tool gets its protocol description (`Tool.Id`, the
+  basic functions, so that a tool lacking one answers 2002). A tool must be qualified on a
+  reference sphere (`ReQualify`) per tool and head position, or measurements carry a systematic
+  error. `ChangeTool` drives to the tool rack and swaps the module; a crash of the breakaway
+  module is error 1501. `Tool.AlignmentVolume` (a sphere, `SPH` and four numbers),
+  `Tool.CollisionVolume` (boxes, `OBB` and 15 numbers) and `Tool.AvrOffsets` are answered from
+  the tool geometry; the last two and `Tool.Alignment` need a calibrated (qualified) tool or
+  answer 2000.
+- **Tool collections.** Tools can be organised in a tree (Figure 56,
+  `pyippdme.types.toolcollection`): `EnumToolCollection`, `OpenToolCollection` and the other
+  collection commands work on it, and entry names of an opened collection are accepted by
+  `ChangeTool`, `FindTool` and `SetTool`.
+- **Coordinate systems.** `pyippdme.types.csy.CsyContext` applies the chain of Figure 12
+  (`MachineCsy`, `RotaryTableCsy`, `PartCsy`, ... with the Euler angles of the standard,
+  φ ∈ [0, 360], θ ∈ [0, 180], ψ ∈ [0, 360]). The twin converts every position and direction of
+  a command into machine coordinates and back, and `VirtualCMM` re-expresses its position when
+  the active CSY changes.
+- **Safety.** Air pressure (error 1000) and the emergency stop (1009, 1005) brake the machine
+  and lose the reference, so the machine has to be homed again.
+- **Check artefact.** `pyippdme.twin.artifact` builds an ISO 10360 style artefact: reference
+  sphere, ring gauge, pin, cone, step gauge, a stepped wedge, four balls, a dome and a groove.
+  `pyippdme.twin.features` fits and compares what was measured, per measuring mode, against the
+  nominal values and the machine's MPE; `pyippdme.twin.check.run_check_program` measures it
+  with a client in every mode.
+
+The path and timing algorithms are plain functions you can use for your own simulation
+(`pyippdme.twin.planning`: `profile_time`, `profile_position`, `plan_homing`,
+`plan_tool_change`, `plan_qualification`, `collision_steps`, ...; `pyippdme.twin.toolmath`:
+tool kinematics), and the transformation maths is in `pyippdme.types.csy`.
 
 ### Machines from STEP files
 
@@ -387,11 +427,9 @@ yourself and pass to `IppDmeServer` or `VirtualCMM`:
 runs a server on a background thread so that a GUI keeps its main thread.
 
 Limits of the twin: the 3D view is a software renderer without OpenGL, so very large meshes
-are thinned while the camera moves; the tool catalog is the fixed set of
-`pyippdme.simulation.classes.tool_class.TOOL_CATALOG`; homing is instant; stylus bending,
-probe pre-travel, lobing and temperature of the machine itself are not modelled; the
-bridge and carriage are only checked against the sample and fixtures, not against the
-stylus.
+are thinned while the camera moves; tools are registered in the process-wide
+`pyippdme.simulation.classes.tool_class.TOOL_CATALOG` while a twin server runs; the machine's
+own temperature is not modelled.
 
 ## Deviations and open points
 
@@ -403,9 +441,16 @@ Where this package departs from VDMA 8722:2024-04, or has to guess:
   (error 2500) and no collisions (2504), and never reports 1014.
   Every measuring tool accepts every measuring and scanning command, so the
   error 2002 ("Type of probe does not allow this operation") never occurs.
-- Coordinate system transformations are stored and returned, but not applied to
-  coordinates: the transformation chain is defined by Figure 12, a diagram that the
-  text of the standard does not contain.
+- `VirtualCMM` stores coordinate system transformations and only re-expresses its position
+  when the active CSY changes; the twin applies the whole chain (Figure 12) to every
+  coordinate. The chain order and the Euler angle convention follow Figure 12 and the formula
+  of 4.1.3 as supplied by the maintainer; the text of the standard was not available.
+- `Tool.AlignmentVolume` is answered as `SPH` and four numbers (Table 118), `Tool.CollisionVolume`
+  as `OBB` and 15 numbers (Table 117). The extension `E` of a box is taken as the half-length
+  along each axis, which Table 117 does not say. Tool collections are listed with the kinds
+  `Collection` and `Tool`, and paths use `/`; the standard gives no wire examples for them.
+- `Tool.A()`, `B()` and `C()` are valid only inside `Get`; written as commands they are
+  answered with 0508 (Table 113). `OnReport` is not implemented.
 - `GetXtdErrStatus()` reports active errors as `ActiveError()` and `Severity()` data
   lines. Table 15 can also be read as asking for error responses.
 - `GetChangeToolAction()` answers `Argument(Switch),X(0),Y(0),Z(0)`. The standard
@@ -423,6 +468,35 @@ Where this package departs from VDMA 8722:2024-04, or has to guess:
   `GeoElem()` arguments of `FeatureExtract`.
 - The deprecated `FeatureExtraction` class (Annex J.2) is in the client but not
   simulated.
+
+## Command client window
+
+`ippdme client-gui` opens a Qt window that connects to any server (or, with `--virtual`, to a
+virtual CMM it starts itself, with the same `--twin`, `--machine` and `--sample` options as
+`ippdme client`).
+
+```bash
+ippdme client-gui 127.0.0.1 --port 1294
+ippdme client-gui --virtual
+```
+
+Icon buttons open dialogs that build the commands for you: **Move** (`GoTo` or `Step`),
+**Point** (`PtMeas` with the probing direction), **Line scan** and **Circle / helix** scan,
+**Tools** (list the tools, `ChangeTool` or `SetTool`), **Speeds** (`GoToPar`, `PtMeasPar`,
+`ScanPar`) and **Optical** (read the sensor, then `DataAcquire` and the point transfer; the
+points appear in a 3D point cloud view that can be copied as CSV or saved as `.xyz`). Home,
+Enable and Abort are toolbar buttons. Every command of the protocol also has a form (the
+**All commands** panel), and there is a command line with history and a script runner.
+
+The status bar follows the machine: the position from every response that carries `X`, `Y`
+and `Z` and a short poll, the homing state, and errors: a failed command shows its number and
+text, and an active machine error shows with a button that sends `ClearAllErrors()`.
+
+The window holds no protocol logic. `pyippdme.client.host.ClientHost` runs the connection on
+a thread (commands may overlap, so `AbortE` works during a move), `pyippdme.client.recipes`
+builds the command lines of the dialogs, `pyippdme.client.commandform` the forms of all
+commands, and `pyippdme.client.optical` reads a sensor and acquires points; use them to put
+another interface on the client.
 
 ## Interactive shell
 

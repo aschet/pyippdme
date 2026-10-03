@@ -71,6 +71,6 @@ def tcp_server_port(tcp_server: VirtualCMM) -> int:
 
 @pytest.fixture(autouse=True)
 def _no_leaked_tools() -> Iterator[None]:
-    """The tool catalog is process-wide: no test may leave tools behind for the next."""
+    """Reset the tool catalog after each test: it is process-wide."""
     yield
     reset_registered_tools()

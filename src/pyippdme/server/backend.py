@@ -82,9 +82,10 @@ class MachineBackend(Protocol):
 
     # Optional: a backend that can probe the real surface of a part also implements
     #
-    #     def scan_contour(self, scan: ContourScan, cancel: CancellationToken) -> AsyncIterator[Vec3]: ...
+    #     scan_contour(scan, cancel) -> AsyncIterator[Vec3]   (an async generator)
     #
     # for the five unknown-contour scans (6.13.2.2, Figures 35-39); see
-    # :mod:`pyippdme.server.contour` for the request and :func:`~pyippdme.server.contour.trace_contour`
-    # for an algorithm that follows a surface given a function that probes it. Without it
-    # those scans fall back to a straight line towards their stop element.
+    # :mod:`pyippdme.server.contour` for the request and
+    # :func:`~pyippdme.server.contour.trace_contour` for an algorithm that follows a surface
+    # given a function that probes it. Without it those scans fall back to a straight line
+    # towards their stop element.

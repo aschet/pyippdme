@@ -114,7 +114,7 @@ PRESETS: dict[str, MachineSpec] = {
 
 #: Measurement modes of a tool and what they allow (``basicfunction`` of Annex G).
 MODES = ("touch", "head_touch", "scanning", "laser", "point_laser", "area", "camera", "none")
-#: Heads that carry the probe: fixed mount, indexing (PH10 style) or continuous 5-axis (PH20/REVO style).
+#: Heads that carry the probe: fixed, indexing (PH10 style) or continuous 5-axis (REVO style).
 HEADS = ("fixed", "indexed", "continuous")
 TIPS = ("down", "+x", "-x", "+y", "-y")
 
@@ -175,7 +175,7 @@ class ToolSpec:
     dropout: float = 0.005
     max_angle_deg: float = 75.0
     triangulation_deg: float = 30.0
-    #: What the sensor delivers: ``RSL`` raw scan lines, ``GSL`` gridded, ``QSP`` averaged on the grid.
+    #: What the sensor delivers: ``RSL`` raw scan lines, ``GSL`` gridded, ``QSP`` averaged.
     point_type: str = "RSL"
     grid_pitch: float = 1.0
     #: Where the tool waits in the rack, shared by the tips of one star; ``None`` is the name.
@@ -280,7 +280,7 @@ DEFAULT_TOOLS: dict[str, ToolSpec] = {
             repeatability_um=0.1,
             breakaway=True,
             color=(0.3, 0.7, 0.4),
-            description="strain-gauge probe on a PH10-style head (7.5 degree steps), 100 mm extension",
+            description="strain-gauge probe on a PH10-style head (7.5° steps), 100 mm extension",
         ),
         ToolSpec(
             "ScanSP25",

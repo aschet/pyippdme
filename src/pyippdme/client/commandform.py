@@ -63,7 +63,7 @@ def command_names() -> list[str]:
 
 
 def command_fields(name: str) -> list[FormField]:
-    """The inputs of ``name``; empty for a command without arguments (or without a schema)."""
+    """Return the inputs of ``name``; empty without arguments (or without a schema)."""
     info = BUILTIN_COMMANDS.get(name)
     if info is None or not info.arguments:
         return []

@@ -301,8 +301,10 @@ class MachineModel:
         rotary_deg: float,
         shift: Vec3 = (0.0, 0.0, 0.0),
     ) -> Matrix:
-        """Pose of a component; ``shift`` is how far the head pivot is from where the quill
-        was built for (a different tool, an articulated head).
+        """Return the pose of a component.
+
+        ``shift`` is how far the head pivot is from where the quill was built for (a different
+        tool, an articulated head).
         """
         offset = [0.0, 0.0, 0.0]
         for axis in body.spec.moves_with:

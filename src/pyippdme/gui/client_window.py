@@ -56,6 +56,7 @@ from pyippdme.client.host import ClientHost
 from pyippdme.client.report import report_from_payload
 from pyippdme.gui import client_dialogs as dialogs
 from pyippdme.gui.icons import app_icon, load_icon
+from pyippdme.gui.pointcloud import PointCloudView
 from pyippdme.protocol.ast import (
     BasicName,
     DataPayload,
@@ -78,6 +79,7 @@ class _Bridge(QObject):
 
     data = Signal(str, object)
     finished = Signal(object, str)  # a Future's exception (or None), what it was for
+    result = Signal(object, str)  # a Future's result, what it was for
 
 
 class _HistoryLine(QLineEdit):
@@ -136,6 +138,7 @@ class ClientWindow(QMainWindow):
         self._bridge = _Bridge()
         self._bridge.data.connect(self._on_event)
         self._bridge.finished.connect(self._on_finished)
+        self._bridge.result.connect(self._on_result)
         self._polling = False
         self._echoed = ""
         self._queries: dict[str, Callable[[list[DataPayload]], None]] = {}
@@ -218,6 +221,9 @@ class ClientWindow(QMainWindow):
             ),
             self._action(
                 "Speeds", "speed", lambda: self.open_dialog("speed"), "Speeds and accelerations"
+            ),
+            self._action(
+                "Optical", "optical", lambda: self.open_dialog("optical"), "Acquire with the sensor"
             ),
         ]
         for action in self.task_actions:
@@ -307,13 +313,30 @@ class ClientWindow(QMainWindow):
         pbox.addLayout(prow)
         self._dock("Measured points", points, Qt.DockWidgetArea.RightDockWidgetArea)
 
+        cloud = QWidget()
+        cbox = QVBoxLayout(cloud)
+        self.cloud = PointCloudView()
+        cbox.addWidget(self.cloud, 1)
+        crow = QHBoxLayout()
+        for text, icon, slot in (
+            ("Fit", "goto", self.cloud.fit),
+            ("Copy as CSV", "save", self.copy_cloud),
+            ("Save .xyz", "save", self.save_cloud),
+            ("Clear", "clear", self.cloud.clear),
+        ):
+            button = QPushButton(load_icon(icon), text)
+            button.clicked.connect(lambda _=False, f=slot: f())
+            crow.addWidget(button)
+        cbox.addLayout(crow)
+        self.cloud_dock = self._dock("Point cloud", cloud, Qt.DockWidgetArea.RightDockWidgetArea)
+
         self.response = _table(["Name", "Value"])
         self._dock("Last response", self.response, Qt.DockWidgetArea.RightDockWidgetArea)
 
     def _build_status_bar(self) -> None:
         bar = self.statusBar()
         self.connection_label = QLabel()
-        self.position_label = QLabel("Position: –")
+        self.position_label = QLabel("Position: -")
         self.position_label.setFont(self.log.font())
         self.homed_label = QLabel()
         self.error_label = QLabel()
@@ -372,7 +395,7 @@ class ClientWindow(QMainWindow):
             else "  Not connected"
         )
         if not connected:
-            self.position_label.setText("Position: –")
+            self.position_label.setText("Position: -")
             self.homed_label.clear()
 
     # -- sending ----------------------------------------------------------------------------
@@ -472,6 +495,7 @@ class ClientWindow(QMainWindow):
             values = [v.value for v in payload.values]
             for i in range(0, len(values) - 2, 3):
                 self._add_point((values[i], values[i + 1], values[i + 2]), text)
+                self.cloud.add_points([(values[i], values[i + 1], values[i + 2])])
                 self.position = (values[i], values[i + 1], values[i + 2])
             self._show_position()
 
@@ -549,6 +573,8 @@ class ClientWindow(QMainWindow):
                 dialog = dialogs.ScanArcDialog(self._current_position, self)
             elif name == "speed":
                 dialog = dialogs.SpeedDialog(self)
+            elif name == "optical":
+                dialog = self._optical_dialog()
             else:
                 tools = dialogs.ToolDialog(self)
                 tools.refresh_requested.connect(
@@ -563,6 +589,73 @@ class ClientWindow(QMainWindow):
         if isinstance(dialog, dialogs.ToolDialog) and not dialog.tools.count():
             dialog.refresh_requested.emit()
         return dialog
+
+    def _optical_dialog(self) -> dialogs.OpticalDialog:
+        dialog = dialogs.OpticalDialog(self._current_position, self)
+        dialog.info_requested.connect(self.read_sensor_info)
+        dialog.acquire_requested.connect(self.acquire)
+        return dialog
+
+    def read_sensor_info(self) -> None:
+        if self.host.connected:
+            self._watch_result(self.host.sensor_info(), "sensor")
+
+    def acquire(self, options: dict[str, Any]) -> None:
+        if not self.host.connected:
+            self._append("Not connected", "error")
+            return
+        self._append(
+            f"> DataAcquire {options['name']} ({options['acquisition_type']}, "
+            f"{len(options['points'])} positions)",
+            "cmd",
+        )
+        self._watch_result(self.host.acquire(**options), "acquire")
+
+    def _watch_result(self, future: Any, what: str) -> None:
+        def done(f: Any) -> None:
+            if f.exception() is not None:
+                self._bridge.finished.emit(f.exception(), what)
+            else:
+                self._bridge.result.emit(f.result(), what)
+
+        future.add_done_callback(done)
+
+    def _on_result(self, result: object, what: str) -> None:
+        if what == "sensor":
+            info = result
+            text = (
+                f"{info.tool_name} ({info.tool_kind}); raw data: "  # type: ignore[attr-defined]
+                f"{', '.join(info.technologies) or 'none'}, format {info.data_format or '-'}"  # type: ignore[attr-defined]
+            )
+            self._append(f"Sensor: {text}", "ok")
+            dialog = self._dialogs.get("optical")
+            if isinstance(dialog, dialogs.OpticalDialog):
+                dialog.set_info("Sensor: " + text)
+        elif what == "acquire":
+            points = result.points()  # type: ignore[attr-defined]
+            self.cloud.set_points(points)
+            self.cloud.fit()
+            self.cloud_dock.raise_()
+            self._append(f"Acquired {len(points)} points", "ok")
+            self.error_label.clear()
+            self._refresh_status()
+
+    def _cloud_csv(self) -> str:
+        out = io.StringIO()
+        writer = csv.writer(out)
+        writer.writerow(["x", "y", "z"])
+        writer.writerows(self.cloud.points.tolist())
+        return out.getvalue()
+
+    def copy_cloud(self) -> None:
+        QGuiApplication.clipboard().setText(self._cloud_csv())
+
+    def save_cloud(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Save the points", "points.xyz", "XYZ (*.xyz)")
+        if path:
+            Path(path).write_text(
+                "".join(f"{x:.6f} {y:.6f} {z:.6f}\n" for x, y, z in self.cloud.points.tolist())
+            )
 
     # -- all commands panel -----------------------------------------------------------------
 

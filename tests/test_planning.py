@@ -22,7 +22,7 @@ def test_pure_modules_import_without_opencascade() -> None:
         "pyippdme.twin.features, pyippdme.twin.optical, pyippdme.twin.depthbuffer; "
         "print('ok')"
     )
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603
         [sys.executable, "-c", code], capture_output=True, text=True, check=False
     )
     assert result.stdout.strip() == "ok", result.stderr

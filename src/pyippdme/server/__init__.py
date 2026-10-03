@@ -129,6 +129,10 @@ class _ActiveTransaction:
     cancel: CancellationToken
 
 
+#: ``Tool.A()``, ``FoundTool.Alignment()`` ...: a property written as a command of its own.
+_PROPERTY_AS_COMMAND_RE = re.compile(r"^\S{5} (?:Tool|FoundTool)\.[A-Za-z]+\(")
+
+
 class _ServerConnection(Generic[StateT]):
     def __init__(
         self,
@@ -190,6 +194,9 @@ class _ServerConnection(Generic[StateT]):
             except IppDmeProtocolError as exc:
                 logger.warning("Unparseable line from %s: %s", self._transport.peer, exc)
                 malformed = (ErrorCode.PROTOCOL_ERROR, "Protocol error")
+                if _PROPERTY_AS_COMMAND_RE.match(line):
+                    # 6.20.2: A(), B(), Alignment() ... "raised if used as independent command".
+                    malformed = (ErrorCode.BAD_CONTEXT, "Bad context")
         if malformed is not None:
             await self._reject_malformed_line(line, *malformed)
             return

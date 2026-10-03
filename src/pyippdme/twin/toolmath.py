@@ -86,7 +86,7 @@ def tip_offset(spec: ToolSpec) -> Vec3:
 
 
 def functions(spec: ToolSpec) -> tuple[str, ...]:
-    """The ``basicfunction`` list (Annex G) of a tool: what the protocol may ask of it."""
+    """Return the ``basicfunction`` list (Annex G) of a tool: what the protocol may ask of it."""
     if spec.mode in OPTICAL_MODES:
         return _OPTICAL_FUNCTIONS
     return {
@@ -98,7 +98,7 @@ def functions(spec: ToolSpec) -> tuple[str, ...]:
 
 
 def tool_id(spec: ToolSpec) -> ToolId:
-    """The ``Tool.Id()`` description of a tool: type, functions, axes and alignment."""
+    """Describe a tool for ``Tool.Id()``: type, functions, axes and alignment."""
     articulated = spec.head != "fixed"
     axes = ("X", "Y", "Z", "A", "B") if articulated else ("X", "Y", "Z")
     align = (
@@ -151,7 +151,7 @@ def head_rotation(spec: ToolSpec, axis: Vec3) -> tuple[Matrix, Vec3, tuple[float
 
 
 def pivot_for(spec: ToolSpec, tcp: Vec3, axis: Vec3) -> Vec3:
-    """Where the head pivot is when the tool centre point is at ``tcp`` and the tool points ``axis``."""
+    """Where the head pivot is when the tool centre point is at ``tcp`` and points ``axis``."""
     rotation, _, _ = head_rotation(spec, axis)
     offset = rotation[:3, :3] @ np.asarray(tip_offset(spec))
     return (tcp[0] - float(offset[0]), tcp[1] - float(offset[1]), tcp[2] - float(offset[2]))

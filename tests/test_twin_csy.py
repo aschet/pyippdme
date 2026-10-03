@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MPL-2.0
 
-"""A client works in its own coordinate system; the twin places the machine in machine coordinates."""
+"""A client works in its own coordinate system; the twin places the machine in its own."""
 
 from __future__ import annotations
 

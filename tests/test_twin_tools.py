@@ -14,6 +14,7 @@ import pytest
 pytest.importorskip("OCP")
 
 from pyippdme import IppDmeMachine
+from pyippdme.client import builders
 from pyippdme.client.builders import AcquisitionPoint
 from pyippdme.exceptions import IppDmeServerError
 from pyippdme.protocol.network import MemoryNetwork
@@ -160,7 +161,7 @@ async def test_a_tool_must_be_qualified_on_a_reference_sphere(rig: Rig) -> None:
 
 
 async def test_tips_of_a_star_share_the_stylus_but_not_the_tool_centre_point(rig: Rig) -> None:
-    twin, machine = rig
+    twin, _ = rig
     tcp = (200.0, 200.0, 100.0)
     down = twin.placement(tcp, "StarDown")
     side = twin.placement(tcp, "StarXP")
@@ -175,7 +176,8 @@ async def test_an_indexing_head_snaps_and_is_qualified_per_position(rig: Rig) ->
     await machine.tool_changer.change_tool("IndexedTP200")
     await machine.tool.align_tool((0.2, 0.0, 0.98), 0.0)
     position = twin.snapshot().head_position
-    assert position is not None and position[0] % 7.5 == 0.0
+    assert position is not None
+    assert position[0] % 7.5 == 0.0
     await machine.tool.align_tool((0.0, 0.0, 1.0), 0.0)
     assert twin.snapshot().head_position == (0.0, 0.0)
 
@@ -185,9 +187,12 @@ async def test_tool_change_drives_to_the_rack_and_back() -> None:
     async for _, machine in _rig(twin):
         await machine.cart_cmm.go_to(x=300, y=300, z=150)
         events: list[str] = []
-        twin.add_listener(
-            lambda e: events.append(e.data.get("stage", "")) if e.kind == "tool_change" else None
-        )
+
+        def record(e: object, into: list[str] = events) -> None:
+            if e.kind == "tool_change":  # type: ignore[attr-defined]
+                into.append(e.data.get("stage", ""))  # type: ignore[attr-defined]
+
+        twin.add_listener(record)
         await machine.tool_changer.change_tool("ScanSP25")
         assert events == ["released", "taken"]
         assert (await machine.cart_cmm.get_position()) == pytest.approx(
@@ -195,9 +200,8 @@ async def test_tool_change_drives_to_the_rack_and_back() -> None:
         )
         assert twin.snapshot().tool_name == "ScanSP25"
         stored = {i.key.split(":")[1] for i in twin.draw_items() if i.kind == "stored"}
-        assert (
-            "RefTool" in stored and "ScanSP25" not in stored
-        )  # the old module is back in its port
+        assert "RefTool" in stored  # the old module is back in its port
+        assert "ScanSP25" not in stored
 
 
 async def test_check_artifact_touch_program_measures_the_reference_sphere() -> None:
@@ -235,3 +239,48 @@ async def test_optical_sweep_over_the_artifact_returns_points_in_the_laser_mode(
         assert len(twin.points["laser"]) > 1000
         zs = np.array([p[2] for p in twin.points["laser"]])
         assert zs.max() == pytest.approx(top + 10.0, abs=0.05)  # the dome's peak
+
+
+async def test_tool_volumes_and_offsets_follow_the_standard_tables(rig: Rig) -> None:
+    """Tables 116-118: ``SPH`` and ``OBB`` separators, offsets, and 2000 for an unqualified tool."""
+    twin, machine = rig
+    await machine.tool_changer.change_tool("IndexedTP200")
+    spheres = await machine.tool.get_alignment_volume()
+    assert len(spheres) == 1
+    assert spheres[0].radius > 10.0
+    boxes = await machine.tool.get_collision_volume()
+    assert boxes
+    reply = await machine.client.call("GetProp", *builders.get_prop("Tool.AlignmentVolume"))
+    assert "SPH" in reply[0].to_wire()
+    assert "2000" in await _error(machine.tool.get_avr_offsets())  # not qualified yet
+    await machine.server.clear_all_errors()
+    twin.qualified.add(("IndexedTP200", None))
+    x, y, z = await machine.tool.get_avr_offsets()
+    assert z < -50.0
+    assert (x, y) == (0.0, 0.0)
+
+
+async def test_client_optical_helpers_read_the_twins_sensor(rig: Rig) -> None:
+    """``read_sensor_info`` and ``acquire`` against a laser line scanner over the demo block."""
+    from pyippdme.client import optical
+
+    twin, machine = rig
+    await machine.tool_changer.change_tool("LaserLine")
+    info = await optical.read_sensor_info(machine)
+    assert info.tool_name == "LaserLine"
+    assert "SocBin" in info.technologies
+    top = twin.machine.spec.table_top_z + 30.0
+    lo, _ = twin.objects[0].world_bounds(twin.machine.rotary_pose(0.0))
+    x, y = float(lo[0]), float(lo[1]) + 30.0
+    path = optical.path_points((x + 10, y, top + 60.0), (x + 60, y, top + 60.0), 6)
+    assert twin.server is not None
+    data = await optical.acquire(
+        machine,
+        "127.0.0.1",
+        acquisition_type="Sweep",
+        points=path,
+        network=twin.server.network,
+    )
+    points = data.points()
+    assert len(points) > 50
+    assert np.median(np.abs(points[:, 2] - top)) < 0.5  # the laser sees the block's top face

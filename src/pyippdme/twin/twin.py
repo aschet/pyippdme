@@ -28,6 +28,7 @@ breakaway module detaches; ``ChangeTool`` drives to the rack.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import math
 import random
 import threading
@@ -67,7 +68,7 @@ from pyippdme.twin.planning import (
     travel_time,
 )
 from pyippdme.twin.spec import ToolSpec
-from pyippdme.twin.toolmath import OPTICAL_MODES, drop, head_rotation
+from pyippdme.twin.toolmath import OPTICAL_MODES, drop, head_rotation, tip_offset
 from pyippdme.twin.tools import ToolKit, ToolModel
 from pyippdme.types.csy import CsyContext, CsyStore, InMemoryCsyStore
 from pyippdme.types.obb import Obb
@@ -176,6 +177,12 @@ class TwinToolHandler:
 
     def collision_volume(self, tool_name: str) -> list[Obb] | None:
         return self._twin.collision_volume(tool_name)
+
+    def is_calibrated(self, tool_name: str) -> bool:
+        return self._twin.is_calibrated(tool_name)
+
+    def avr_offsets(self, tool_name: str) -> Vec3 | None:
+        return self._twin.avr_offsets(tool_name)
 
 
 class ClientSensor:
@@ -381,7 +388,7 @@ class DigitalTwin:
     # -- coordinate systems --------------------------------------------------------------
 
     def csy_context(self) -> CsyContext:
-        """The client's coordinate system: what it activated and how it sits in the machine.
+        """Return the client's coordinate system: what it activated and how it sits in the machine.
 
         A client commands and reads positions in the coordinate system it activated
         (``SetCoordSystem``), placed by the transformations it set (``SetCsyTransformation``,
@@ -398,23 +405,23 @@ class DigitalTwin:
         return CsyContext(state.cart_cmm.active_csy, state.cart_cmm.csy_transformations, var)
 
     def to_machine(self, point: Vec3, context: CsyContext | None = None) -> Vec3:
-        """A point of the client's coordinate system in machine coordinates."""
+        """Convert a point of the client's coordinate system to machine coordinates."""
         return (context or self.csy_context()).to_machine(point)
 
     def to_client(self, point: Vec3, context: CsyContext | None = None) -> Vec3:
-        """A machine point in the client's coordinate system."""
+        """Convert a machine point to the client's coordinate system."""
         return (context or self.csy_context()).to_client(point)
 
     def to_machine_direction(self, vector: Vec3, context: CsyContext | None = None) -> Vec3:
-        """A direction (probing direction, tool axis) in machine coordinates: rotation only."""
+        """Convert a direction (probing direction, tool axis) to machine coordinates."""
         return (context or self.csy_context()).direction_to_machine(vector)
 
     def to_client_direction(self, vector: Vec3, context: CsyContext | None = None) -> Vec3:
-        """A machine direction in the client's coordinate system."""
+        """Convert a machine direction to the client's coordinate system."""
         return (context or self.csy_context()).direction_to_client(vector)
 
     def client_error(self, error: MotionError, context: CsyContext | None = None) -> MotionError:
-        """A motion error with its stopping position in the client's coordinates."""
+        """Return a motion error with its stopping position in the client's coordinates."""
         return MotionError(
             error.severity,
             error.number,
@@ -594,7 +601,7 @@ class DigitalTwin:
         return ToolPlacement(name, spec, model, rotation, axis, pivot, orientation)
 
     def alignment_volume(self, name: str) -> tuple[Vec3, float] | None:
-        """The sphere that holds the tool in every alignment (``Tool.AlignmentVolume``, Fig. 52/53).
+        """Return the sphere that holds the tool in every alignment (``Tool.AlignmentVolume``).
 
         Its centre is the head's pivot, as a vector from the tool's reference point (in machine
         coordinates); its radius reaches the farthest point of the probe and stylus.
@@ -604,7 +611,7 @@ class DigitalTwin:
         return (float(centre[0]), float(centre[1]), float(centre[2])), placement.model.reach
 
     def collision_volume(self, name: str) -> list[Obb] | None:
-        """Oriented boxes along the tool's axes that cover it (``Tool.CollisionVolume``, Fig. 49-51)."""
+        """Oriented boxes along the tool's axes that cover it (``Tool.CollisionVolume``)."""
         placement = self.placement(self._pos, name)
         rotation = placement.rotation[:3, :3]
         tip = np.asarray(placement.model.tip_offset)
@@ -633,11 +640,24 @@ class DigitalTwin:
             placement.pivot[2] - (tcp[2] + ref),
         )
 
+    def is_calibrated(self, name: str) -> bool:
+        """Whether ``Tool.Alignment`` and ``Tool.AvrOffsets`` can answer (tactile: qualified)."""
+        spec = self.toolkit.spec(name)
+        return (
+            spec.mode in OPTICAL_MODES
+            or not self.require_qualification
+            or any(q[0] == name for q in self.qualified)
+        )
+
+    def avr_offsets(self, name: str) -> Vec3:
+        """Return the tool centre point relative to the head pivot (``Tool.AvrOffsets``)."""
+        return tip_offset(self.toolkit.spec(name))
+
     def is_qualified(self, name: str, orientation: tuple[float, float] | None) -> bool:
         return (name, orientation) in self.qualified
 
     def _optical_spec(self) -> OpticalSpec | None:
-        """The active tool's optical sensor as a spec, if it has one."""
+        """Return the active tool's optical sensor as a spec, if it has one."""
         spec = self.toolkit.spec(self.tool_name())
         kind = {"laser": "line", "point_laser": "point", "area": "area", "camera": "camera"}.get(
             spec.mode
@@ -661,7 +681,7 @@ class DigitalTwin:
         )
 
     def depth_buffer(self, direction: Vec3) -> DepthBuffer:
-        """The scene rasterised along ``direction`` (towards the scene), cached per scene state."""
+        """Rasterise the scene along ``direction`` (towards the scene), cached per scene state."""
         rotary = round(self._current_rotary(), 6)
         key = (self.scene_version, rotary, tuple(round(c, 4) for c in normalize(direction)))
         buffer = self._buffers.get(key)
@@ -805,7 +825,7 @@ class DigitalTwin:
         self.emit("scan", points=len(points), mode=mode)
 
     def artifact(self) -> SceneObject | None:
-        """The first object in the scene that carries an artefact description."""
+        """Return the first object in the scene that carries an artefact description."""
         return next((o for o in self.objects if o.artifact and len(o.artifact.features) > 1), None)
 
     def evaluate(self, obj: SceneObject | None = None) -> dict[str, list[Result]]:
@@ -827,7 +847,7 @@ class DigitalTwin:
         return out
 
     def reference_sphere(self) -> tuple[Vec3, float, SceneObject] | None:
-        """Centre and radius of the first qualification sphere in the scene, in machine coordinates."""
+        """Centre and radius of the first qualification sphere, in machine coordinates."""
         rotary = self.machine.rotary_pose(self._current_rotary())
         for obj in self.objects:
             if obj.artifact is None or obj.artifact.reference is None:
@@ -953,7 +973,7 @@ class DigitalTwin:
     async def run_path(
         self, waypoints: list[Vec3], speed: float, accel: float, cancel: asyncio.Event, cause: str
     ) -> None:
-        for a, b in zip(waypoints, waypoints[1:], strict=False):
+        for a, b in itertools.pairwise(waypoints):
             await self.run_leg(a, b, speed, accel, cancel, cause=cause)
 
     def surface_normal(self, point: Vec3, hint: Vec3) -> Vec3:
@@ -988,7 +1008,7 @@ class DigitalTwin:
         return self._pos
 
     async def run_probe(self, request: ProbeRequest, start: Vec3) -> ProbeResult:
-        """The probing cycle of ``PtMeas`` (6.12.1): search, trigger, overtravel, retract.
+        """Run the probing cycle of ``PtMeas`` (6.12.1): search, trigger, overtravel, retract.
 
         From the approach position the machine moves towards the surface at the search speed
         for up to ``approach + search``. The ball triggers when it touches the surface, which
@@ -1386,7 +1406,7 @@ class DigitalTwin:
         return items
 
     def _stored_tool_items(self, mounted_key: str) -> list[DrawItem]:
-        """The probe modules waiting in the rack, standing on their ports, tip up."""
+        """Return the probe modules waiting in the rack, standing on their ports, tip up."""
         slots = self.machine.rack_slots()
         flip = geometry.rotation((1.0, 0.0, 0.0), 180.0)
         items: list[DrawItem] = []

@@ -105,7 +105,7 @@ def fit_plane(points: Points) -> tuple[NDArray[np.float64], NDArray[np.float64]]
 def qualified_edge_point(
     side_a: Points, side_b: Points
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
-    """The qualified edge point of two point clouds on either side of an edge (Figure 41).
+    """Compute the qualified edge point of two point clouds on either side of an edge (Figure 41).
 
     Fits a plane to each cloud, intersects them, and returns the point of the intersection line
     that lies nearest to the middle of the data, with the direction of the line. ``None`` if a

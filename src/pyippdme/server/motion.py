@@ -102,7 +102,7 @@ class ToolHandler(Protocol):
     async def requalify(self, tool_name: str, cancel: asyncio.Event) -> None: ...
 
     def alignment_volume(self, tool_name: str) -> tuple[Vec3, float] | None:
-        """The sphere the tool occupies while it is aligned (``Tool.AlignmentVolume``, Fig. 52/53).
+        """Return the sphere the tool occupies while aligned (``Tool.AlignmentVolume``, Fig. 52/53).
 
         ``(centre, radius)``: the vector from the tool's reference point to the sphere centre,
         in machine coordinates, and the radius. ``None`` if the tool has no such volume.
@@ -117,6 +117,13 @@ class ToolHandler(Protocol):
         """
         ...
 
+    # Optional, looked up by name so that handlers written before them keep working:
+    #
+    # ``is_calibrated(tool_name) -> bool``: ``False`` makes ``Tool.Alignment`` and
+    # ``Tool.AvrOffsets`` fail with ``2000`` "Tool not calibrated" (Tables 114 and 116).
+    # ``avr_offsets(tool_name) -> Vec3 | None``: the average tool offsets in machine coordinates
+    # (``Tool.AvrOffsets``, Table 116); ``None`` answers with zeros.
+
 
 @runtime_checkable
 class MotionModel(Protocol):
@@ -129,7 +136,7 @@ class MotionModel(Protocol):
         ...
 
     def csy_context(self) -> CsyContext | None:
-        """The coordinate system chain as this machine has it, or ``None`` for the default.
+        """Return the coordinate system chain as this machine has it, or ``None`` for the default.
 
         A model that knows more than the commands set (the angle of its rotary table for
         ``RotaryTableVarCsy``) returns the complete context; the position a client reads is

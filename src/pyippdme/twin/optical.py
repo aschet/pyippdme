@@ -22,6 +22,7 @@ steps are unreliable (flying pixels); a share of points drops out.
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -119,7 +120,7 @@ def stations(
     if acquisition_type != "Sweep" or len(base) < 2:
         return base
     dense: list[Station] = []
-    for a, b in zip(base, base[1:], strict=False):
+    for a, b in itertools.pairwise(base):
         length = norm(sub(b.position, a.position))
         count = max(1, math.ceil(length / spacing))
         for k in range(count):
@@ -136,7 +137,7 @@ def stations(
 
 
 def field_axes(view: Vec3, travel: Vec3) -> tuple[Array, Array]:
-    """The field's axes: ``u`` across the line (perpendicular to view and travel), ``v`` along."""
+    """Return the field's axes: ``u`` across the line (across view and travel), ``v`` along."""
     d = np.asarray(view, dtype=float)
     u = np.cross(d, np.asarray(travel, dtype=float))
     if np.linalg.norm(u) < 1e-9:
@@ -148,7 +149,7 @@ def field_axes(view: Vec3, travel: Vec3) -> tuple[Array, Array]:
 
 
 class OpticalSensor:
-    """Samples a scene like an optical sensor; satisfies :class:`~pyippdme.server.surface.RawSensor`."""
+    """Sample a scene like an optical sensor; satisfies ``server.surface.RawSensor``."""
 
     def __init__(
         self,
@@ -213,7 +214,7 @@ class OpticalSensor:
     # -- one shot ----------------------------------------------------------------------
 
     def shoot(self, station: Station, s: OpticalSpec) -> list[MeasPoint]:
-        """The points one shot returns."""
+        """Return the points one shot returns."""
         buffer = self._buffers(station.view)
         u, v = field_axes(station.view, station.travel)
         origin = np.asarray(station.position, dtype=float)
@@ -222,7 +223,7 @@ class OpticalSensor:
         rows = 1
         if s.kind in ("area", "camera"):
             pixel = s.line_width / max(cols - 1, 1)
-            rows = max(int(round(s.field_height / pixel)), 2)
+            rows = max(round(s.field_height / pixel), 2)
         a = np.zeros(1) if cols == 1 else (np.arange(cols) / (cols - 1) - 0.5) * s.line_width
         b = np.zeros(1) if rows == 1 else (np.arange(rows) / (rows - 1) - 0.5) * s.field_height
         grid_a, grid_b = np.meshgrid(a, b)  # (rows, cols)

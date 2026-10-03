@@ -98,7 +98,9 @@ class _ThemedSvgEngine(QIconEngine):
         renderer.render(painter, QRectF(rect))
         painter.restore()
 
-    def actualSize(self, size: QSize, mode: QIcon.Mode, state: QIcon.State) -> QSize:
+    def actualSize(  # noqa: N802
+        self, size: QSize, mode: QIcon.Mode, state: QIcon.State
+    ) -> QSize:
         return size
 
     def pixmap(self, size: QSize, mode: QIcon.Mode, state: QIcon.State) -> QPixmap:
@@ -124,5 +126,5 @@ def app_icon() -> QIcon:
 
 
 def icon_names() -> list[str]:
-    """The names :func:`load_icon` accepts."""
+    """Return the names :func:`load_icon` accepts."""
     return sorted(p.stem for p in _ICON_DIR.glob("*.svg") if p.stem != "app")

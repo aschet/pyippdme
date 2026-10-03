@@ -46,12 +46,12 @@ class CollectionNode:
 
 
 def split_path(path: str) -> list[str]:
-    """The node names of ``path``; ``""`` and ``"/"`` are the root."""
+    """Split ``path`` into node names; ``""`` and ``"/"`` are the root."""
     return [part for part in path.split(SEPARATOR) if part]
 
 
 def find_node(root: CollectionNode, path: str) -> CollectionNode | None:
-    """The collection at ``path``, or ``None`` if there is none (a tool reference is no node)."""
+    """Return the collection at ``path``, or ``None`` (a tool reference is no node)."""
     node = root
     for part in split_path(path):
         nxt = node.child(part)
@@ -90,7 +90,7 @@ def descendants_of(root: CollectionNode, path: str) -> list[tuple[str, str]] | N
 
 
 def resolve_tool(root: CollectionNode, open_path: str | None, name: str) -> str | None:
-    """The tool-list entry that ``name`` stands for in the opened collection, or ``None``."""
+    """Return the tool-list entry that ``name`` stands for in the opened collection, or ``None``."""
     if open_path is None:
         return None
     node = find_node(root, open_path)
@@ -99,7 +99,7 @@ def resolve_tool(root: CollectionNode, open_path: str | None, name: str) -> str 
 
 
 def add_reference(root: CollectionNode, path: str, name: str, tool: str) -> None:
-    """Reference ``tool`` as ``name`` in the collection at ``path``, creating nodes on the way."""
+    """Add ``tool`` as ``name`` in the collection at ``path``, creating nodes on the way."""
     node = root
     for part in split_path(path):
         nxt = node.child(part)

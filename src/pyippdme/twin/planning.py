@@ -12,6 +12,7 @@ these functions plan, and a simulation of your own can use them the same way
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass
 
@@ -53,7 +54,9 @@ def travelled(t: float, distance: float, vmax: float, accel: float) -> float:
 def _phases(
     distance: float, vmax: float, accel: float, v_start: float, v_end: float
 ) -> tuple[float, float, float, float, float, float]:
-    """Split a leg into accelerate, cruise and decelerate: ``(vp, t_acc, d_acc, t_cru, d_cru, t_dec)``.
+    """Split a leg into accelerate, cruise and decelerate.
+
+    Returns ``(vp, t_acc, d_acc, t_cru, d_cru, t_dec)``.
 
     The leg may start and end at any speed (``v_start``, ``v_end``): the machine does not stop
     at the approach point of a probing move, it slows down to the probing speed and goes on.
@@ -78,7 +81,7 @@ def _phases(
 def profile_time(
     distance: float, vmax: float, accel: float, v_start: float = 0.0, v_end: float = 0.0
 ) -> float:
-    """Duration of a leg that starts at ``v_start`` and ends at ``v_end`` (both 0: see travel_time)."""
+    """Duration of a leg from ``v_start`` to ``v_end`` (both 0: see ``travel_time``)."""
     if distance <= 0.0:
         return 0.0
     _, t_acc, _, t_cru, _, t_dec = _phases(distance, vmax, accel, v_start, v_end)
@@ -110,7 +113,7 @@ def profile_position(
 
 
 def point_along(start: Vec3, end: Vec3, fraction: float) -> Vec3:
-    """The point ``fraction`` (0..1) of the way from ``start`` to ``end``."""
+    """Return the point ``fraction`` (0..1) of the way from ``start`` to ``end``."""
     return (
         start[0] + (end[0] - start[0]) * fraction,
         start[1] + (end[1] - start[1]) * fraction,
@@ -119,15 +122,12 @@ def point_along(start: Vec3, end: Vec3, fraction: float) -> Vec3:
 
 
 def path_length(waypoints: list[Vec3]) -> float:
-    return sum(math.dist(a, b) for a, b in zip(waypoints, waypoints[1:], strict=False))
+    return sum(math.dist(a, b) for a, b in itertools.pairwise(waypoints))
 
 
 def path_duration(waypoints: list[Vec3], vmax: float, accel: float) -> float:
     """Time to drive through ``waypoints`` leg by leg, stopping at each (as the twin does)."""
-    return sum(
-        travel_time(math.dist(a, b), vmax, accel)
-        for a, b in zip(waypoints, waypoints[1:], strict=False)
-    )
+    return sum(travel_time(math.dist(a, b), vmax, accel) for a, b in itertools.pairwise(waypoints))
 
 
 # -- collision walk -----------------------------------------------------------------------

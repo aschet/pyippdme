@@ -79,7 +79,7 @@ from pyippdme.server._util import bad_argument
 from pyippdme.server.registry import CommandHandler, CommandRegistry, HandlerResult, PropertyKind
 from pyippdme.server.tool import PARAMETER_FIELDS, ParameterField, ToolParameter, ToolParameters
 from pyippdme.simulation.context import Ctx, csy_context
-from pyippdme.types.obb import OBB_TOKEN
+from pyippdme.types.obb import OBB_TOKEN, SPH_TOKEN
 from pyippdme.types.tool_id import (
     BASIC_FUNCTIONS,
     ContinuousAlignMode,
@@ -189,13 +189,13 @@ _COLLECTIONS = CollectionNode("")
 
 
 def collection_root() -> CollectionNode:
-    """The root of all tool collections: the flat one of every tool, and the registered ones."""
+    """Return the root of all tool collections: the flat one of every tool, and the others."""
     flat = CollectionNode(DEFAULT_TOOL_COLLECTION, [ToolRef(name, name) for name in TOOL_CATALOG])
     return CollectionNode("", [flat, *_COLLECTIONS.children])
 
 
 def register_collection_entry(path: str, name: str, tool: str) -> None:
-    """Reference the catalog tool ``tool`` as ``name`` in the collection at ``path``.
+    """Add the catalog tool ``tool`` as ``name`` in the collection at ``path``.
 
     Nodes on the way are created; the same tool can be referenced any number of times, under
     any name (Figure 56). Like :func:`register_tool` this is process-wide.
@@ -209,7 +209,7 @@ def clear_collections() -> None:
 
 
 def resolve_tool_name(ctx: Ctx, name: str) -> str | None:
-    """The catalog tool that ``name`` means: an entry of the opened collection, else a tool name."""
+    """Return the catalog tool that ``name`` means: an opened collection's entry, else a tool."""
     mapped = resolve_tool(collection_root(), ctx.state.tool.open_collection, name)
     if mapped is not None and mapped in TOOL_CATALOG:
         return mapped
@@ -321,6 +321,15 @@ def tool_alignment(ctx: Ctx, tool_name: str) -> tuple[Vec3, Vec3 | None]:
     simplification note on how those angles are derived.
     """
     return ctx.state.tool.alignment.get(tool_name, (_DEFAULT_ALIGNMENT, None))
+
+
+def _require_calibrated(ctx: Ctx, tool_name: str, cause: str) -> None:
+    """Raise ``2000`` if the tool handler says the tool is not calibrated (Tables 114, 116)."""
+    check = getattr(ctx.tool_handler, "is_calibrated", None)
+    if check is not None and not check(tool_name):
+        raise ServerError(
+            ErrorSeverity.CRITICAL, ErrorCode.TOOL_NOT_CALIBRATED, cause, "Tool not calibrated"
+        )
 
 
 def is_alignable_tool(tool_name: str) -> bool:
@@ -525,13 +534,19 @@ def _try_get_named_tool_property(ctx: Ctx, arg: NamedValue) -> NamedValue | None
         # GetProp(Tool.Alignment())" - the setter form (Table 115) is not
         # modeled, see the module docstring.
         _require_alignable(tool_name, arg.name)
+        _require_calibrated(ctx, tool_name, arg.name)
         primary, secondary = tool_alignment(ctx, tool_name)
         numbers = (*primary, *(secondary or ()))
         return NamedValue(arg.name, tuple(Number.of(c) for c in numbers))
     if leaf == "AvrOffsets":
         # "Relative to an arbitrary reference point which changes from server to server"
-        # (Table 116): this simulation has no offset model, so zero.
-        return NamedValue(arg.name, tuple(Number.of(0.0) for _ in range(3)))
+        # (Table 116): zero, unless the tool handler knows the tool's offsets.
+        _require_calibrated(ctx, tool_name, arg.name)
+        offsets = getattr(ctx.tool_handler, "avr_offsets", lambda _name: None)(tool_name)
+        if offsets is None:
+            return NamedValue(arg.name, tuple(Number.of(0.0) for _ in range(3)))
+        offsets = csy_context(ctx).direction_to_client(offsets)
+        return NamedValue(arg.name, tuple(Number.of(v) for v in offsets))
     if leaf == "AlignmentVolume":
         # Figures 52/53: a sphere about the head's pivot that holds the tool in every alignment;
         # the centre is the vector from the tool's reference point, in the active CSY.
@@ -540,7 +555,9 @@ def _try_get_named_tool_property(ctx: Ctx, arg: NamedValue) -> NamedValue | None
             return NamedValue(arg.name, ())
         centre, radius = volume
         centre = csy_context(ctx).direction_to_client(centre)
-        return NamedValue(arg.name, tuple(Number.of(v) for v in (*centre, radius)))
+        return NamedValue(
+            arg.name, (BasicName(SPH_TOKEN), *(Number.of(v) for v in (*centre, radius)))
+        )
     if leaf == "CollisionVolume":
         # Figures 49-51: oriented bounding boxes that cover the tool, each as ``OBB`` and 15
         # numbers, in the active CSY (a rotated tool gets rotated boxes).

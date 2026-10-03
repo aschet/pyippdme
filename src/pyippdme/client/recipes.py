@@ -9,7 +9,7 @@ Each function returns the text of one command (or the few commands a task needs,
 
     goto_line(x=10, y=20)                 # 'GoTo(X(10),Y(20))'
     pt_meas_line((10, 20, 0), (0, 0, 1))  # 'PtMeas(X(10),Y(20),Z(0),IJK(0,0,1))'
-    scan_line_lines((0, 0, 0), (50, 0, 0), (0, 0, 1), 2.0)   # ['OnScanReport(X,Y,Z)', 'ScanOnLine(...)']
+    scan_line_lines((0, 0, 0), (50, 0, 0), (0, 0, 1), 2.0)  # ['OnScanReport(X,Y,Z)', ...]
 """
 
 from __future__ import annotations
@@ -131,5 +131,5 @@ def speed_lines(block: str, speed: float | None, accel: float | None) -> list[st
 
 
 def status_lines() -> list[str]:
-    """What a front end polls for its status bar: the position and the error state."""
+    """List what a front end polls for its status bar: the position and the error state."""
     return [_line("Get", builders.get("X", "Y", "Z")), "GetXtdErrStatus()"]

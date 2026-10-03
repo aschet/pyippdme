@@ -93,11 +93,13 @@ def _no_tool(cause: str) -> ServerError:
 
 
 async def _enum_tools(_ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
+    if not TOOL_CATALOG:  # Table 119: "Returned if there is no tool at all"
+        raise _no_tool(CommandName.ENUM_TOOLS)
     return builders.name_list(TOOL_CATALOG)
 
 
 async def _enum_tool_collection(_ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
-    """The direct children of a collection (Figure 56); the empty name is level 0."""
+    """Return the direct children of a collection (Figure 56); the empty name is level 0."""
     node_name = _require_node_name(args, CommandName.ENUM_TOOL_COLLECTION)
     children = children_of(collection_root(), node_name)
     if children is None:

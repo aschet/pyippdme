@@ -109,7 +109,7 @@ class CompositeSurface:
 
 
 def parse_surface(spec: str) -> SampleSurface:
-    """Parse ``plane:px,py,pz:nx,ny,nz``, ``sphere:cx,cy,cz:r`` or ``cylinder:px,py,pz:ax,ay,az:r``."""
+    """Parse ``plane:px,py,pz:nx,ny,nz``, ``sphere:cx,cy,cz:r`` or ``cylinder:p:a:r``."""
     kind, *parts = spec.split(":")
 
     def vector(text: str) -> Vec3:

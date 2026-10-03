@@ -101,7 +101,7 @@ class ToolModel:
     def placed(
         self, pivot: Vec3, rotation: Matrix, *, with_tip: bool = True
     ) -> tuple[cad.Shape, cad.Shape]:
-        """``(fixed, turning)`` shapes in machine coordinates; ``turning`` includes the tip ball."""
+        """Return ``(fixed, turning)`` shapes in machine coordinates (``turning`` has the tip)."""
         fixed = cad.moved(self.fixed_shape, geometry.translation(*pivot))
         pose = geometry.translation(*pivot) @ rotation
         parts = [self.turning_shape, self.tip_shape] if with_tip else [self.turning_shape]
@@ -286,7 +286,7 @@ class ToolKit:
         return self._models[spec]
 
     def reference_drop(self) -> float:
-        """Pivot height above the tool centre point of the reference tool (quill is built for it)."""
+        """Pivot height above the tool centre point of the reference tool."""
         return drop(self.spec("RefTool"))
 
     def register(self) -> None:
@@ -296,10 +296,13 @@ class ToolKit:
 
         reference = tip_offset(self.spec("RefTool"))
         for name, spec in self.specs.items():
-            if name in TOOL_CATALOG and name not in self._registered:
-                # A built-in tool keeps its protocol description; only its physics is ours.
-                if name in ("RefTool", "RefTool2", "AlignProbe", "NoTool"):
-                    continue
+            # A built-in tool keeps its protocol description; only its physics is ours.
+            if (
+                name in TOOL_CATALOG
+                and name not in self._registered
+                and name in ("RefTool", "RefTool2", "AlignProbe", "NoTool")
+            ):
+                continue
             offset = tuple(a - b for a, b in zip(tip_offset(spec), reference, strict=True))
             register_tool(
                 name,

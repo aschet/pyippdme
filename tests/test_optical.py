@@ -52,9 +52,11 @@ def test_a_point_sensor_returns_one_distance_inside_its_depth_window() -> None:
     cloud = sensor.acquire("a", "SingleShot", [(20.0, 50.0, 40.0)], [(0.0, 0.0, 1.0)])
     assert cloud is not None
     points = cloud.point_clouds[0].point_sets[0].points
-    assert len(points) == 1 and points[0].z == pytest.approx(10.0)
+    assert len(points) == 1
+    assert points[0].z == pytest.approx(10.0)
     too_far = sensor.acquire("b", "SingleShot", [(20.0, 50.0, 80.0)], [(0.0, 0.0, 1.0)])
-    assert too_far is not None and not too_far.point_clouds[0].point_sets[0].points
+    assert too_far is not None
+    assert not too_far.point_clouds[0].point_sets[0].points
 
 
 def test_a_line_scanner_profiles_a_step_and_marks_unreliable_edges() -> None:

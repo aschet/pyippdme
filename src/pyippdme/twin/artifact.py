@@ -67,6 +67,8 @@ class PlanPoint:
 
 @dataclass(frozen=True, slots=True)
 class ScanLine:
+    """A straight scan path: start, end, probing direction and point spacing."""
+
     start: Vec3
     end: Vec3
     normal: Vec3
@@ -75,6 +77,8 @@ class ScanLine:
 
 @dataclass(frozen=True, slots=True)
 class ScanCircle:
+    """A circular scan path around ``center``."""
+
     center: Vec3
     start: Vec3
     normal: Vec3
@@ -87,7 +91,7 @@ class Sweep:
     """Control points for ``DataAcquire(..., Sweep, ...)`` and the sensor's ``primary`` vector."""
 
     positions: tuple[Vec3, ...]
-    #: Anti-parallel to the tool axis, pointing away from the surface (the sensor looks along -primary).
+    #: Anti-parallel to the tool axis, away from the surface (the sensor looks along -primary).
     direction: Vec3
 
 
@@ -108,7 +112,7 @@ class ArtifactData:
     extent: tuple[Vec3, Vec3] = ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
 
     def placed(self, pose: Matrix) -> ArtifactData:
-        """The same data in machine coordinates, for an artefact placed with ``pose``."""
+        """Return the same data in machine coordinates, for an artefact placed with ``pose``."""
 
         def point(p: Vec3) -> Vec3:
             v = pose[:3, :3] @ np.asarray(p) + pose[:3, 3]
@@ -435,7 +439,7 @@ def build_data() -> ArtifactData:
 
 
 def build_check_artifact(name: str = "Check artefact") -> SceneObject:
-    """The check artefact as a scene object; its ``artifact`` attribute has the nominal data."""
+    """Build the check artefact as a scene object; ``artifact`` holds the nominal data."""
     obj = SceneObject.from_shape(name, "sample", build_shape(), source="builtin check artefact")
     obj.artifact = build_data()
     obj.color = (0.55, 0.6, 0.65)
@@ -443,7 +447,7 @@ def build_check_artifact(name: str = "Check artefact") -> SceneObject:
 
 
 def build_reference_sphere(name: str = "Reference sphere") -> SceneObject:
-    """A qualification sphere (25 mm) on a post and a small base, to qualify tools on."""
+    """Build a qualification sphere (25 mm) on a post and a small base, to qualify tools on."""
     base = cad.rounded_box(60.0, 60.0, 15.0, (-30.0, -30.0, 0.0), 2.0)
     post = cad.make_cylinder(5.0, 70.0, (0.0, 0.0, 15.0))
     ball = cad.make_sphere(12.5, (0.0, 0.0, 15.0 + 70.0 + 6.0))

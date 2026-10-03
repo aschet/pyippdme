@@ -138,3 +138,82 @@ def test_machine_can_be_exported_and_loaded_back(window: MainWindow, tmp_path: P
     window._refresh_machine_info()
     assert "700" in window.machine_info.text()
     _ = asyncio  # the host owns its own loop
+
+
+def test_tool_editor_changes_a_tool_that_the_protocol_sees(window: MainWindow) -> None:
+    panel = window.tool_panel
+    names = [panel.tools.item(i).text() for i in range(panel.tools.count())]
+    assert "RefTool" in names
+    panel.tools.setCurrentRow(names.index("RefTool"))
+    panel.copy()
+    assert "RefTool2" in window.twin.machine.tools
+    panel.name_edit.setText("RefTool2")
+    widget = panel.editor._widgets["ball_radius"]
+    widget.setValue(1.5)  # type: ignore[attr-defined]
+    panel.apply()
+    assert window.twin.machine.tools["RefTool2"].ball_radius == pytest.approx(1.5)
+    panel.name_edit.setText("bad name")
+    panel.apply()
+    assert "not applied" in panel.status.text().lower()
+    panel.tools.setCurrentRow(sorted(window.twin.machine.tools).index("RefTool2"))
+    panel.remove()
+    assert "RefTool2" not in window.twin.machine.tools
+
+
+def test_check_artifact_is_placed_measured_and_evaluated(
+    window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+    from collections import deque
+
+    import numpy as np
+
+    from pyippdme.gui import twin_panels
+
+    panel = window.check_panel
+    panel.evaluate()
+    assert "place" in panel.status.text().lower()
+    panel.add_artifact()
+    panel.add_sphere()
+    assert window.twin.artifact() is not None
+    # The full program takes minutes of simulated collision checking; stand in for the client
+    # and put points on the artefact's reference sphere as a probing run would.
+    calls: list[tuple[int, tuple[str, ...]]] = []
+
+    async def fake(host: str, port: int, data: object, options: object, progress: object) -> None:
+        calls.append((port, options.modes))  # type: ignore[attr-defined]
+        progress("touch")  # type: ignore[operator]
+        sphere = next(f for f in data.features if f.name == "reference sphere")  # type: ignore[attr-defined]
+        angles = np.linspace(0.0, 6.28, 30)
+        ring = np.column_stack([np.cos(angles), np.sin(angles), np.zeros(30)])
+        window.twin.points.setdefault("touch", deque()).extend(
+            (sphere.center + ring * sphere.radius).tolist()
+        )
+
+    monkeypatch.setattr(twin_panels, "run_check_against_server", fake)
+    panel.run_program()
+    assert "server first" in panel.status.text().lower()
+    window.toggle_server()
+    for mode, check in panel.mode_checks.items():
+        check.setChecked(mode == "touch")
+    panel.run_program()
+    deadline = time.monotonic() + 10
+    while not panel.run_button.isEnabled() and time.monotonic() < deadline:
+        _pump(0.02)
+    _pump(0.05)
+    assert calls == [(window.host.port, ("touch",))]
+    assert panel.table.rowCount() > 0
+    window.toggle_server()
+
+
+def test_safety_panel_presses_the_emergency_stop(window: MainWindow) -> None:
+    panel = window.safety_panel
+    panel.estop.setChecked(True)
+    assert window.twin.estop
+    assert window.twin.snapshot().estop
+    panel.estop.setChecked(False)
+    panel.air.setChecked(False)
+    assert not window.twin.air_ok
+    panel.air.setChecked(True)
+    window._tick()
+    assert "qualified" in window.state_label.text()

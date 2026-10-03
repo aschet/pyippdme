@@ -20,7 +20,10 @@ from typing import Any, TypeVar
 
 from pyippdme.cli._interaction import CommandEvent, ConnectionLost, run_command_line
 from pyippdme.client import IppDmeClient
+from pyippdme.client.model import IppDmeMachine
+from pyippdme.client.optical import SensorInfo, acquire, read_sensor_info
 from pyippdme.protocol.network import TCP_NETWORK, MemoryNetwork, Network
+from pyippdme.rawdata.formats import ScanData
 from pyippdme.server import IppDmeServer
 
 T = TypeVar("T")
@@ -38,6 +41,7 @@ class ClientHost:
         self._thread.start()
         self._client: IppDmeClient | None = None
         self._embedded: IppDmeServer[Any] | None = None
+        self._address: tuple[str, Network] = ("", TCP_NETWORK)
 
     def _run(self) -> None:
         asyncio.set_event_loop(self._loop)
@@ -57,6 +61,7 @@ class ClientHost:
     async def _connect(self, host: str, port: int, network: Network) -> None:
         await self._disconnect()
         self._client = await IppDmeClient.connect(host, port, network=network)
+        self._address = (host, network)
 
     def connect(self, host: str, port: int) -> Future[None]:
         """Connect over TCP; the future fails with the connection error."""
@@ -77,6 +82,7 @@ class ClientHost:
             self._client = await IppDmeClient.connect(
                 "virtual", port, network=self._embedded.network
             )
+            self._address = ("virtual", self._embedded.network)
 
         return self.submit(start())
 
@@ -104,6 +110,28 @@ class ClientHost:
                     self._client = None
 
         return self.submit(go())
+
+    def sensor_info(self) -> Future[SensorInfo]:
+        """Return the active tool and how its raw data is delivered."""
+
+        async def go() -> SensorInfo:
+            return await read_sensor_info(self._machine())
+
+        return self.submit(go())
+
+    def acquire(self, **options: Any) -> Future[ScanData]:
+        """Run ``DataAcquire`` with the active tool and fetch the points."""
+
+        async def go() -> ScanData:
+            host, network = self._address
+            return await acquire(self._machine(), host, network=network, **options)
+
+        return self.submit(go())
+
+    def _machine(self) -> IppDmeMachine:
+        if self._client is None:
+            raise RuntimeError("not connected")
+        return IppDmeMachine(self._client)
 
     def run_sequence(self, lines: list[str], on_event: EventHandler) -> Future[bool]:
         """Send the lines one after the other; stops at the first error. True if all succeeded."""

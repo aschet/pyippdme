@@ -74,8 +74,8 @@ class DepthBuffer:
         b = tri @ self.v
         h = -(tri @ self.direction)  # height towards the sensor
         self._origin = np.array([a.min() - pixel, b.min() - pixel])
-        na = int(math.ceil((a.max() - self._origin[0]) / pixel)) + 2
-        nb = int(math.ceil((b.max() - self._origin[1]) / pixel)) + 2
+        na = math.ceil((a.max() - self._origin[0]) / pixel) + 2
+        nb = math.ceil((b.max() - self._origin[1]) / pixel) + 2
         self.shape = (na, nb)
         self._ids = np.full(self.shape, -1, dtype=np.int64)
         self._height = np.full(self.shape, -np.inf)
@@ -100,7 +100,7 @@ class DepthBuffer:
     def _bary(
         ta: tuple[Array, Array, Array], tb: tuple[Array, Array, Array], ga: Array, gb: Array
     ) -> tuple[Array, Array, Array, Array]:
-        """Barycentric weights of pixel centres ``(ga, gb)`` in triangles with corners ``ta``/``tb``."""
+        """Barycentric weights of pixel centres ``(ga, gb)`` in triangles ``ta``/``tb``."""
         det = (tb[1] - tb[2]) * (ta[0] - ta[2]) + (ta[2] - ta[1]) * (tb[0] - tb[2])
         safe = np.where(np.abs(det) > 1e-14, det, np.inf)
         w0 = ((tb[1] - tb[2]) * (ga - ta[2]) + (ta[2] - ta[1]) * (gb - tb[2])) / safe

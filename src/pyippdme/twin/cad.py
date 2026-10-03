@@ -288,7 +288,7 @@ def make_cylinder(
 def rounded_box(
     dx: float, dy: float, dz: float, origin: Vec3 = (0.0, 0.0, 0.0), radius: float = 0.0
 ) -> Shape:
-    """A box with all edges rounded by ``radius`` (a plain box if the radius is zero)."""
+    """Build a box with all edges rounded by ``radius`` (a plain box if the radius is zero)."""
     box = make_box(dx, dy, dz, origin)
     if radius <= 0.0:
         return box

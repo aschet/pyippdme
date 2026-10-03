@@ -105,7 +105,7 @@ class CoordinateTransform:
         return 0.0 <= self.theta <= 180.0
 
     def rotation_matrix(self) -> npt.NDArray[np.float64]:
-        """The rotation from child to parent coordinates: ``Rz(Psi) @ Rx(Theta) @ Rz(Phi)``.
+        """Return the rotation from child to parent coordinates: ``Rz(Psi) @ Rx(Theta) @ Rz(Phi)``.
 
         The standard (6.5.1, Figure 12 text) defines the transformation from the parent to the
         child CSY as ``p' = R(phi, theta, psi) . (p - t)`` with::
@@ -142,7 +142,7 @@ class CoordinateTransform:
 
 
 def transform_matrix(transform: CoordinateTransform) -> npt.NDArray[np.float64]:
-    """The 4x4 homogeneous matrix of ``transform`` (child coordinates to parent coordinates)."""
+    """Return the 4x4 homogeneous matrix of ``transform`` (child to parent coordinates)."""
     m = np.eye(4)
     m[:3, :3] = transform.rotation_matrix()
     m[:3, 3] = (transform.x0, transform.y0, transform.z0)
@@ -154,7 +154,7 @@ def chain_matrix(
     transforms: Mapping[str, CoordinateTransform],
     rotary_var: npt.NDArray[np.float64] | None = None,
 ) -> npt.NDArray[np.float64]:
-    """The 4x4 matrix that maps points of the ``active`` CSY into ``MachineCsy``.
+    """Return the 4x4 matrix that maps points of the ``active`` CSY into ``MachineCsy``.
 
     ``transforms`` holds the live transformations of the CSYs of :data:`CSY_CHAIN` by name (a
     CSY without one is placed at its parent). ``RotaryTableVarCsy`` is not set by a command
@@ -200,25 +200,25 @@ class CsyContext:
     rotary_var: npt.NDArray[np.float64] | None = None
 
     def matrix(self) -> npt.NDArray[np.float64]:
-        """The 4x4 matrix mapping the active CSY into ``MachineCsy``."""
+        """Return the 4x4 matrix mapping the active CSY into ``MachineCsy``."""
         return chain_matrix(self.active, self.transforms, self.rotary_var)
 
     def to_machine(self, point: Vec3) -> Vec3:
-        """A point of the active CSY in machine coordinates."""
+        """Convert a point of the active CSY to machine coordinates."""
         m = self.matrix()
         return from_array(m[:3, :3] @ to_array(point) + m[:3, 3])
 
     def to_client(self, point: Vec3) -> Vec3:
-        """A machine point in the active CSY."""
+        """Convert a machine point to the active CSY."""
         m = self.matrix()
         return from_array(m[:3, :3].T @ (to_array(point) - m[:3, 3]))
 
     def direction_to_machine(self, vector: Vec3) -> Vec3:
-        """A direction of the active CSY in machine coordinates (rotation only)."""
+        """Convert a direction of the active CSY to machine coordinates (rotation only)."""
         return from_array(self.matrix()[:3, :3] @ to_array(vector))
 
     def direction_to_client(self, vector: Vec3) -> Vec3:
-        """A machine direction in the active CSY (rotation only)."""
+        """Convert a machine direction to the active CSY (rotation only)."""
         return from_array(self.matrix()[:3, :3].T @ to_array(vector))
 
 

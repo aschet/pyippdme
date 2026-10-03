@@ -15,7 +15,7 @@ _COLUMNS = ("mode", "feature", "quantity", "n", "nominal", "measured", "error µ
 
 
 class EvaluationTable(QTableWidget):
-    """Shows ``DigitalTwin.evaluate()``: what each mode measured and whether it is within the MPE."""
+    """Show ``DigitalTwin.evaluate()``: what each mode measured, and if it is within the MPE."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(0, len(_COLUMNS), parent)

@@ -6,9 +6,10 @@
 
 The standard's example (Figure 50) answers::
 
-    Tool.CollisionVolume(OBB, 100.0, 30.0, 40.0, 500.0, 15.0, 20.0,
-                              0.8944, 0.2683, 0.3578, -0.2873, 0.9578, 0.0, -0.3427, -0.1027, 0.9337,
-                         OBB, 150.0, 10.0, 530.0, 50.0, 50.0, 500.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, ...)
+    Tool.CollisionVolume(
+        OBB, 100.0, 30.0, 40.0, 500.0, 15.0, 20.0,
+        0.8944, 0.2683, 0.3578, -0.2873, 0.9578, 0.0, -0.3427, -0.1027, 0.9337,
+        OBB, 150.0, 10.0, 530.0, 50.0, 50.0, 500.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, ...)
 
 Each box is the token ``OBB`` and 15 numbers (Figure 46): the vector ``C`` to the centre of the box
 from the active tool, the extensions ``E`` of the box, and the three orthogonal unit vectors
@@ -30,7 +31,9 @@ from dataclasses import dataclass
 from pyippdme.types.vec3 import Vec3
 
 #: The token that starts each box in the answer.
-OBB_TOKEN = "OBB"
+OBB_TOKEN = "OBB"  # noqa: S105
+#: Precedes each sphere of ``Tool.AlignmentVolume`` (Table 118).
+SPH_TOKEN = "SPH"  # noqa: S105
 #: Numbers per box after the token: ``C``, ``E``, ``I``, ``J``, ``K``.
 OBB_NUMBERS = 15
 
@@ -47,7 +50,7 @@ class Obb:
     axes: tuple[Vec3, Vec3, Vec3]
 
     def numbers(self) -> tuple[float, ...]:
-        """The 15 numbers of the answer: ``C``, ``E``, ``I``, ``J``, ``K``."""
+        """Return the 15 numbers of the answer: ``C``, ``E``, ``I``, ``J``, ``K``."""
         return (*self.center, *self.extent, *self.axes[0], *self.axes[1], *self.axes[2])
 
     @classmethod
@@ -62,6 +65,6 @@ class Obb:
         )
 
     def mapped(self, direction: Callable[[Vec3], Vec3]) -> Obb:
-        """The box with its centre vector and axes turned by ``direction`` (a rotation)."""
+        """Return the box with its centre vector and axes turned by ``direction`` (a rotation)."""
         i, j, k = (direction(a) for a in self.axes)
         return Obb(direction(self.center), self.extent, (i, j, k))

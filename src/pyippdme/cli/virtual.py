@@ -231,7 +231,7 @@ def configure(options: SimulationOptions) -> None:
 
 
 def create_embedded(network: Network) -> IppDmeServer[Any]:
-    """The in-process machine of ``--virtual``: as configured, or the minimal one."""
+    """Create the in-process machine of ``--virtual``: as configured, or the minimal one."""
     if _factory is not None:
         return _factory(network)
     return VirtualCMM(network=network)

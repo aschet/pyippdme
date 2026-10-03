@@ -93,7 +93,7 @@ class ToolEditor(QWidget):
         self._loading = False
 
     def spec(self) -> ToolSpec:
-        """The spec with the values of the inputs; an invalid combination raises ``ValueError``."""
+        """Return the spec with the inputs' values; an invalid combination raises ``ValueError``."""
         values: dict[str, Any] = {}
         for name, widget in self._widgets.items():
             if isinstance(widget, QComboBox):

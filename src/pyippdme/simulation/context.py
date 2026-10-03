@@ -26,7 +26,7 @@ Ctx: TypeAlias = CommandContext[SimulationState]
 
 
 def csy_context(ctx: Ctx) -> CsyContext:
-    """The client's coordinate system chain: the active CSY and the transformations it set.
+    """Return the client's coordinate system chain: the active CSY and the transformations it set.
 
     A motion model that knows more than the commands set (the rotary table's angle) supplies the
     complete context itself.

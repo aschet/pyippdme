@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyippdme.gui.twin_panels import CheckPanel, SafetyPanel, ToolPanel
 from pyippdme.gui.viewport import Viewport
 from pyippdme.protocol.transport import DEFAULT_PORT
 from pyippdme.twin import DigitalTwin, MachineModel, TwinEvent, demo_sample, geometry
@@ -88,6 +89,7 @@ class MainWindow(QMainWindow):
         self._build_scene_dock()
         self._build_jog_dock()
         self._build_log_dock()
+        self._build_panels()
         self._build_menus()
         self.statusBar().showMessage("Server stopped")
 
@@ -247,6 +249,19 @@ class MainWindow(QMainWindow):
         layout.addLayout(stats)
         layout.addStretch(1)
         self._dock("Machine position", w, Qt.DockWidgetArea.RightDockWidgetArea)
+
+    def _build_panels(self) -> None:
+        self.tool_panel = ToolPanel(self.twin)
+        self.check_panel = CheckPanel(self.twin, self.host.submit, lambda: self.host.port)
+        self.safety_panel = SafetyPanel(self.twin)
+        right = Qt.DockWidgetArea.RightDockWidgetArea
+        tools = self._dock("Tools", self.tool_panel, right)
+        check = self._dock("Check artefact", self.check_panel, right)
+        safety = self._dock("Safety", self.safety_panel, right)
+        scene = next(d for d in self.findChildren(QDockWidget) if d.windowTitle() == "Scene")
+        for dock in (tools, check, safety):
+            self.tabifyDockWidget(scene, dock)
+        scene.raise_()
 
     def _build_log_dock(self) -> None:
         w = QWidget()
@@ -482,8 +497,13 @@ class MainWindow(QMainWindow):
         flags = [
             "moving" if snap.moving else "idle",
             "homed" if snap.homed else "not homed",
-            f"tool {snap.tool_name}",
+            f"tool {snap.tool_name} ({snap.tool_mode})",
+            "qualified" if snap.qualified else "not qualified",
         ]
+        if snap.estop:
+            flags.append("EMERGENCY STOP")
+        if not snap.air_ok:
+            flags.append("no air")
         self.state_label.setText(", ".join(flags) + (f"\n{snap.error}" if snap.error else ""))
         self.client_label.setText(snap.peer or "no client")
         self.stats_label.setText(
@@ -496,10 +516,15 @@ class MainWindow(QMainWindow):
     def _on_event(self, event: object) -> None:
         if not isinstance(event, TwinEvent):
             return
-        if event.kind in ("scene", "machine"):
+        if event.kind in ("scene", "machine", "tools"):
             if event.kind == "machine":
                 self._refresh_machine_info()
+            if event.kind in ("machine", "tools"):
+                self.tool_panel.refresh()
             return
+        if event.kind in ("qualified", "safety"):
+            self.safety_panel.refresh()
+            self.safety_panel.sync()
         if event.kind in ("line_in", "line_out"):
             if self.wire_check.isChecked():
                 self.log.appendPlainText(

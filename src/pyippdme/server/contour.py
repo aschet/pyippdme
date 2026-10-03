@@ -33,7 +33,7 @@ SurfaceProbe = Callable[[Vec3, Vec3], tuple[Vec3, Vec3] | None]
 
 @dataclass(frozen=True, slots=True)
 class ContourConstraint:
-    """What the path stays in: a plane (``ScanInPlane``) or a cylindrical surface (``ScanInCyl``)."""
+    """What the path stays in: a plane (``ScanInPlane``) or a cylinder (``ScanInCyl``)."""
 
     kind: str  # "plane" or "cylinder"
     #: The scanning plane's normal (``Ni, Nj, Nk``).
@@ -95,14 +95,15 @@ def _toward(vector: Vec3, reference: Vec3) -> Vec3:
 
 
 def _cylinder_radius_vector(constraint: ContourConstraint, point: Vec3) -> Vec3:
-    assert constraint.axis_point is not None and constraint.axis is not None  # noqa: S101
+    assert constraint.axis_point is not None  # noqa: S101
+    assert constraint.axis is not None  # noqa: S101
     axis = normalize(constraint.axis)
     offset = sub(point, constraint.axis_point)
     return sub(offset, scale(axis, dot(offset, axis)))
 
 
 def _next_heading(constraint: ContourConstraint, point: Vec3, normal: Vec3, heading: Vec3) -> Vec3:
-    """The direction of travel that is tangent to the surface and stays in the constraint."""
+    """Return the direction of travel that is tangent to the surface and stays in the constraint."""
     if constraint.kind == "plane":
         assert constraint.normal is not None  # noqa: S101
         across = np.cross(normalize(constraint.normal), normal)
@@ -126,7 +127,8 @@ def _constrain(constraint: ContourConstraint, point: Vec3, radius: float) -> Vec
     """Pull a nominal point back onto the cylinder (a plane needs nothing: heading is in it)."""
     if constraint.kind != "cylinder":
         return point
-    assert constraint.axis_point is not None and constraint.axis is not None  # noqa: S101
+    assert constraint.axis_point is not None  # noqa: S101
+    assert constraint.axis is not None  # noqa: S101
     axis = normalize(constraint.axis)
     offset = sub(point, constraint.axis_point)
     along = dot(offset, axis)

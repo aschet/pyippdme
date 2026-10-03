@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyippdme.client import recipes
+from pyippdme.client import optical, recipes
 from pyippdme.gui.icons import load_icon
 from pyippdme.types.vec3 import Vec3
 
@@ -387,3 +387,102 @@ class SpeedDialog(TaskDialog):
         if not lines:
             raise ValueError("choose speed, acceleration or both")
         return lines
+
+
+class OpticalDialog(TaskDialog):
+    """Acquire points with the active tool: ``DataAcquire`` and the transfer."""
+
+    acquire_requested = Signal(dict)
+    info_requested = Signal()
+
+    def __init__(self, position: PositionProvider, parent: QWidget | None = None) -> None:
+        super().__init__("Optical sensor", "optical", parent)
+        self._position = position
+        self.info = QLabel("Sensor not read yet")
+        self.info.setWordWrap(True)
+        read = QPushButton(load_icon("refresh"), "Read sensor info")
+        read.clicked.connect(self.info_requested.emit)
+        self.kind = QComboBox()
+        self.kind.addItems(optical.ACQUISITION_TYPES)
+        self.kind.setCurrentText("Sweep")
+        self.start = VectorEdit()
+        self.end = VectorEdit()
+        self.end.set_value((50.0, 0.0, 0.0))
+        self.count = QSpinBox()
+        self.count.setRange(1, 10000)
+        self.count.setValue(2)
+        self.count.setSuffix(" positions")
+        self.step = _spin(0.0, 1000.0, 1.0)
+        self.step.setSpecialValueText("not set")
+        self.axis = VectorEdit("", "IJK")
+        self.axis.set_value((0.0, 0.0, 1.0))
+        self.format = QComboBox()
+        self.format.addItems(("double", "float"))
+        self.name = QLineEdit("Acq1")
+        current = QPushButton(load_icon("goto"), "Start at the current position")
+        current.clicked.connect(self._take_position)
+        self.form.addRow(self.info)
+        self.form.addRow(read)
+        self.form.addRow("Name", self.name)
+        self.form.addRow("Type", self.kind)
+        self.form.addRow("From", self.start)
+        self.form.addRow("", current)
+        self.form.addRow("To", self.end)
+        self.form.addRow("Positions", self.count)
+        self.form.addRow("Largest step", self.step)
+        self.form.addRow("Sensor axis (away from the surface)", self.axis)
+        self.form.addRow("", _DirectionPicker(self.axis))
+        self.form.addRow("Sample format", self.format)
+        _connect_all(
+            self,
+            self.kind,
+            self.start,
+            self.end,
+            self.count,
+            self.step,
+            self.axis,
+            self.format,
+            self.name,
+        )
+        self.run_button.setText("Acquire")
+
+    def _take_position(self) -> None:
+        position = self._position()
+        if position is not None:
+            self.start.set_value(position)
+
+    def set_info(self, text: str) -> None:
+        self.info.setText(text)
+
+    def options(self) -> dict[str, object]:
+        """Return the arguments of :func:`pyippdme.client.optical.acquire`."""
+        name = self.name.text().strip()
+        if not name:
+            raise ValueError("give the acquisition a name")
+        kind = self.kind.currentText()
+        axis = self.axis.value()
+        if not any(axis):
+            raise ValueError("the sensor axis must not be zero")
+        count = 1 if kind == "SingleShot" and not any(self.end.value()) else self.count.value()
+        if kind == "SingleShot":
+            points = optical.path_points(self.start.value(), self.start.value(), 1, primary=axis)
+        else:
+            if count < 2:
+                raise ValueError("a multi-shot or sweep needs at least two positions")
+            points = optical.path_points(self.start.value(), self.end.value(), count, primary=axis)
+        return {
+            "name": name,
+            "acquisition_type": kind,
+            "points": points,
+            "step_width": self.step.value() or None,
+            "data_format": self.format.currentText(),
+        }
+
+    def lines(self) -> list[str]:
+        """Summarise for the preview; the acquisition itself is not a command line."""
+        options = self.options()
+        count = len(options["points"])  # type: ignore[arg-type]
+        return [f"DataAcquire {options['name']}: {options['acquisition_type']}, {count} positions"]
+
+    def _run(self) -> None:
+        self.acquire_requested.emit(self.options())

@@ -67,7 +67,7 @@ def test_recipes_and_forms_build_valid_commands() -> None:
     ]
     for line in lines:
         parse_method(line)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="required"):
         commandform.build_command_line("GetErrorInfo", {})
 
 
@@ -109,3 +109,21 @@ def test_errors_show_in_the_status_bar(window: ClientWindow) -> None:
     assert "Error" in window.log.toPlainText()
     window.send("GetErrStatusE()")
     _wait(lambda: not window.error_label.text())
+
+
+def test_optical_dialog_acquires_points_into_the_cloud_view(window: ClientWindow) -> None:
+    window.connect_virtual()
+    _wait(lambda: window.host.connected and window.homed_label.text() != "")
+    dialog = window.open_dialog("optical")
+    dialog.info_requested.emit()  # type: ignore[attr-defined]
+    _wait(lambda: "raw data" in dialog.info.text())  # type: ignore[attr-defined]
+    assert "SocBin" in dialog.info.text()  # type: ignore[attr-defined]
+    dialog.start.set_value((0.0, 0.0, 0.0))  # type: ignore[attr-defined]
+    dialog.end.set_value((20.0, 0.0, 0.0))  # type: ignore[attr-defined]
+    dialog.run_button.click()
+    _wait(lambda: len(window.cloud.points) > 10)
+    assert window.cloud.points[:, 0].max() == pytest.approx(20.0, abs=0.5)
+    image = window.cloud.render_image()
+    assert not image.isNull()
+    assert "XYZ" not in window._cloud_csv()
+    assert window._cloud_csv().startswith("x,y,z")

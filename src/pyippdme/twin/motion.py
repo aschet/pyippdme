@@ -37,7 +37,7 @@ class TwinMotion:
         return self._twin.to_client((0.0, 0.0, 0.0))
 
     async def travel(self, request: MotionRequest) -> Vec3:
-        """Carry out a move given in the client's coordinate system; returns where it ended there."""
+        """Carry out a move given in the client's coordinate system; return where it ended."""
         twin = self._twin
         context = twin.csy_context()
         machine = replace(
@@ -51,7 +51,7 @@ class TwinMotion:
             raise twin.client_error(error, context) from None
 
     async def probe(self, request: ProbeRequest) -> ProbeResult:
-        """The probing cycle for a request in the client's coordinate system."""
+        """Run the probing cycle for a request in the client's coordinate system."""
         twin = self._twin
         context = twin.csy_context()
         state = twin.state
