@@ -13,14 +13,14 @@ import pytest
 
 pytest.importorskip("OCP")
 
-from pyippdme import IppDmeMachine  # noqa: E402
-from pyippdme.client.builders import AcquisitionPoint  # noqa: E402
-from pyippdme.exceptions import IppDmeServerError  # noqa: E402
-from pyippdme.protocol.network import MemoryNetwork  # noqa: E402
-from pyippdme.twin import DigitalTwin, demo_sample  # noqa: E402
-from pyippdme.twin.artifact import build_check_artifact, build_reference_sphere  # noqa: E402
-from pyippdme.twin.check import CheckOptions, run_check_program  # noqa: E402
-from pyippdme.types.tool_id import ToolIdOptical2DRs, ToolIdTactileMeasuring  # noqa: E402
+from pyippdme import IppDmeMachine
+from pyippdme.client.builders import AcquisitionPoint
+from pyippdme.exceptions import IppDmeServerError
+from pyippdme.protocol.network import MemoryNetwork
+from pyippdme.twin import DigitalTwin, demo_sample
+from pyippdme.twin.artifact import build_check_artifact, build_reference_sphere
+from pyippdme.twin.check import CheckOptions, run_check_program
+from pyippdme.types.tool_id import ToolIdOptical2DRs, ToolIdTactileMeasuring
 
 TOP = -10.0 + 30.0  # top of the demo block (the table is at z = -10, the block is 30 mm high)
 Rig = tuple[DigitalTwin, IppDmeMachine]

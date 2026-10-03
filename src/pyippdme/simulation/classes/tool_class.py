@@ -80,7 +80,6 @@ from pyippdme.server.registry import CommandHandler, CommandRegistry, HandlerRes
 from pyippdme.server.tool import PARAMETER_FIELDS, ParameterField, ToolParameter, ToolParameters
 from pyippdme.simulation.context import Ctx, csy_context
 from pyippdme.types.obb import OBB_TOKEN
-from pyippdme.types.toolcollection import CollectionNode, ToolRef, add_reference, resolve_tool
 from pyippdme.types.tool_id import (
     BASIC_FUNCTIONS,
     ContinuousAlignMode,
@@ -89,6 +88,7 @@ from pyippdme.types.tool_id import (
     ToolIdTactileTouchTrigger,
 )
 from pyippdme.types.tool_id import to_xml as tool_id_to_xml
+from pyippdme.types.toolcollection import CollectionNode, ToolRef, add_reference, resolve_tool
 from pyippdme.types.vec3 import Vec3, dot, normalize
 
 #: What a catalog tool can do: move, measure single points and scan.

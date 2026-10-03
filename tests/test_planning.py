@@ -24,7 +24,7 @@ def test_pure_modules_import_without_opencascade() -> None:
     )
     result = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, check=False
-    )  # noqa: S603
+    )
     assert result.stdout.strip() == "ok", result.stderr
 
 

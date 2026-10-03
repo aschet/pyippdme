@@ -47,10 +47,10 @@ from pyippdme.simulation import DEFAULT_COMMAND_CLASSES
 from pyippdme.simulation.backend import SimulatedBackend
 from pyippdme.simulation.classes.cartcmm_class import pt_meas_fields
 from pyippdme.simulation.classes.tool_class import TOOL_CATALOG, collection_root
-from pyippdme.types.toolcollection import find_node
 from pyippdme.simulation.classes.toolchanger_class import activate_tool
 from pyippdme.simulation.state import SimulationState
 from pyippdme.types.csy import CsyStore, FileCsyStore
+from pyippdme.types.toolcollection import find_node
 from pyippdme.types.vec3 import Vec3
 
 #: 6.4.1's naming scheme's four purely presence-based top-level objects:

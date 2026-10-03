@@ -12,11 +12,11 @@ import pytest
 
 pytest.importorskip("OCP")
 
-from pyippdme import IppDmeMachine  # noqa: E402
-from pyippdme.exceptions import IppDmeServerError  # noqa: E402
-from pyippdme.protocol.network import MemoryNetwork  # noqa: E402
-from pyippdme.twin import DigitalTwin, demo_sample  # noqa: E402
-from pyippdme.types.csy import CoordinateTransform  # noqa: E402
+from pyippdme import IppDmeMachine
+from pyippdme.exceptions import IppDmeServerError
+from pyippdme.protocol.network import MemoryNetwork
+from pyippdme.twin import DigitalTwin, demo_sample
+from pyippdme.types.csy import CoordinateTransform
 
 # The demo block stands at x 310..390, y 320..380, its top face is at z = 20 (machine coordinates).
 ORIGIN = (310.0, 320.0, 20.0)

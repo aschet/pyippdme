@@ -19,8 +19,8 @@ from __future__ import annotations
 from typing import TypeAlias
 
 from pyippdme.server.registry import CommandContext
-from pyippdme.types.csy import CsyContext
 from pyippdme.simulation.state import SimulationState
+from pyippdme.types.csy import CsyContext
 
 Ctx: TypeAlias = CommandContext[SimulationState]
 

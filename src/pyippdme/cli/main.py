@@ -86,6 +86,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "run 'ippdme gui --help' for its options",
     )
 
+    subparsers.add_parser(
+        "client-gui",
+        add_help=False,
+        help="Qt window to send commands to a server from dialogs (needs pyippdme[gui]); "
+        "run 'ippdme client-gui --help' for its options",
+    )
+
     tui_parser = subparsers.add_parser(
         "tui", help="full-screen terminal UI for sending commands to a server (needs pyippdme[tui])"
     )
@@ -201,6 +208,16 @@ def _run_gui(argv: list[str]) -> None:
     raise SystemExit(gui_main(argv))
 
 
+def _run_client_gui(argv: list[str]) -> None:
+    try:
+        from pyippdme.gui.client_window import main as client_gui_main
+    except ImportError as exc:
+        raise SystemExit(
+            "The GUI needs the optional 'gui' dependency group: pip install pyippdme[gui]"
+        ) from exc
+    raise SystemExit(client_gui_main(argv))
+
+
 def _run_tui(host: str | None, port: int, virtual: bool) -> None:
     try:
         from pyippdme.cli.tui import run
@@ -281,6 +298,8 @@ def main() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] == "gui":
         _run_gui(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "client-gui":
+        _run_client_gui(sys.argv[2:])
     parser = _build_parser()
     args = parser.parse_args()
     if args.command in ("client", "tui"):

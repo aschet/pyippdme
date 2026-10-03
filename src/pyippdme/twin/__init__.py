@@ -47,15 +47,15 @@ _EXPORTS = {
 }
 
 __all__ = [
-    "Accuracy",
     "DEFAULT_TOOLS",
+    "PRESETS",
+    "Accuracy",
     "DigitalTwin",
     "DrawItem",
     "LineScanner",
     "LineScannerSpec",
     "MachineModel",
     "MachineSpec",
-    "PRESETS",
     "SceneObject",
     "SimulationView",
     "ToolSpec",
@@ -68,19 +68,19 @@ __all__ = [
 ]
 
 if TYPE_CHECKING:
-    from pyippdme.twin.artifact import build_check_artifact, build_reference_sphere  # noqa: F401
-    from pyippdme.twin.machine import MachineModel  # noqa: F401
-    from pyippdme.twin.objects import SceneObject, demo_sample, primitive_fixture  # noqa: F401
-    from pyippdme.twin.optical import LineScanner, LineScannerSpec  # noqa: F401
-    from pyippdme.twin.spec import (  # noqa: F401
+    from pyippdme.twin.artifact import build_check_artifact, build_reference_sphere
+    from pyippdme.twin.machine import MachineModel
+    from pyippdme.twin.objects import SceneObject, demo_sample, primitive_fixture
+    from pyippdme.twin.optical import LineScanner, LineScannerSpec
+    from pyippdme.twin.spec import (
         DEFAULT_TOOLS,
         PRESETS,
         Accuracy,
         MachineSpec,
         ToolSpec,
     )
-    from pyippdme.twin.twin import DigitalTwin, DrawItem, TwinEvent, TwinSnapshot  # noqa: F401
-    from pyippdme.twin.view import SimulationView  # noqa: F401
+    from pyippdme.twin.twin import DigitalTwin, DrawItem, TwinEvent, TwinSnapshot
+    from pyippdme.twin.view import SimulationView
 
 
 def __getattr__(name: str) -> Any:

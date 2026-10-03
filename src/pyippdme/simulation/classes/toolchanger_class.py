@@ -47,6 +47,8 @@ from pyippdme.simulation.classes.tool_class import (
     collection_root,
     resolve_tool_name,
 )
+from pyippdme.simulation.context import Ctx
+from pyippdme.simulation.tool import default_tool_parameters
 from pyippdme.types.toolcollection import (
     SEPARATOR,
     children_of,
@@ -54,8 +56,6 @@ from pyippdme.types.toolcollection import (
     find_node,
     split_path,
 )
-from pyippdme.simulation.context import Ctx
-from pyippdme.simulation.tool import default_tool_parameters
 from pyippdme.types.vec3 import Vec3, norm, sub
 
 _TOOL_NAME_PARAMS = (Parameter("ToolName", DataType.STRING, positional=True),)

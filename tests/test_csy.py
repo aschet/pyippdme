@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+
 import numpy as np
 import pytest
 
@@ -14,8 +15,8 @@ from pyippdme import IppDmeClient
 from pyippdme.exceptions import IppDmeServerError
 from pyippdme.protocol.ast import BasicName, DataPayload, Items, Number, String
 from pyippdme.protocol.commands import CommandName
-from pyippdme.types.vec3 import Vec3
 from pyippdme.types.csy import CoordinateTransform, FileCsyStore, InMemoryCsyStore
+from pyippdme.types.vec3 import Vec3
 
 
 def _numbers(data: DataPayload) -> dict[str, float]:
@@ -208,7 +209,7 @@ async def test_load_coord_system_unknown_raises_1013(started_client: IppDmeClien
 
 
 def _standard_parent_to_child(p: Vec3, t: Vec3, phi: float, theta: float, psi: float) -> Vec3:
-    """p' = A(phi) . B(theta) . C(psi) . (p - t), exactly as printed in the standard."""
+    """P' = A(phi) . B(theta) . C(psi) . (p - t), exactly as printed in the standard."""
     f, th, ps = (math.radians(a) for a in (phi, theta, psi))
     a = np.array([[math.cos(f), math.sin(f), 0], [-math.sin(f), math.cos(f), 0], [0, 0, 1]])
     b = np.array([[1, 0, 0], [0, math.cos(th), math.sin(th)], [0, -math.sin(th), math.cos(th)]])
