@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 from pyippdme.gui.widgets import Led, mono, separator
 from pyippdme.twin.twin import TwinSnapshot
+from pyippdme.types.vec3 import Vec3
 
 __all__ = ["StatusStrip"]
 
@@ -45,8 +46,12 @@ class StatusStrip(QWidget):
         else:
             self.server.set_state("off", "Server stopped")
 
-    def update_from(self, snap: TwinSnapshot) -> None:
-        """Show the machine state of one moment."""
+    def update_from(self, snap: TwinSnapshot, readout: tuple[str, Vec3] | None = None) -> None:
+        """Show the machine state of one moment.
+
+        ``readout`` is the position in a chosen coordinate system, as ``(name, point)``; without
+        it the machine position is shown.
+        """
         if snap.peer:
             self.client.set_state("on", snap.peer)
         else:
@@ -68,5 +73,10 @@ class StatusStrip(QWidget):
         detached = " - stylus broke away" if snap.detached else ""
         self.tool.setText(f"Tool {snap.tool_name} ({snap.tool_mode}), {qualified}{detached}")
         self.banner.setText(snap.error)
-        x, y, z = snap.position
-        self.position.setText(f"X {x:9.3f}  Y {y:9.3f}  Z {z:9.3f}  R {snap.rotary:7.2f}")
+        name, point = readout if readout is not None else ("MachineCsy", snap.position)
+        x, y, z = point
+        self.position.setText(
+            f"{name[:-3] if name.endswith('Csy') else name}  "
+            f"X {x:9.3f}  Y {y:9.3f}  Z {z:9.3f}  R {snap.rotary:7.2f}"
+        )
+        self.position.setToolTip(f"Position in {name}; the client works in {snap.active_csy}")

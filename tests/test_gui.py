@@ -23,6 +23,7 @@ from pyippdme import IppDmeMachine
 from pyippdme.gui.gamepad import PadMapping, PadState
 from pyippdme.gui.main_window import MainWindow
 from pyippdme.twin import DigitalTwin, cad
+from pyippdme.types.csy import CoordinateTransform
 
 
 @pytest.fixture
@@ -397,3 +398,49 @@ def test_the_machine_panel_sets_table_kind_and_rack(window: MainWindow) -> None:
     panel.preset_combo.setCurrentText("bridge-900")
     assert window.twin.machine.spec.table_kind == "fixed"  # a preset brings its own layout
     assert panel.table_combo.currentData() == "fixed"
+
+
+def test_the_coordinates_tab_follows_the_clients_coordinate_system(window: MainWindow) -> None:
+    window.toggle_server()
+    port = window.host.port
+    assert port
+    panel = window.csy_panel
+    names = [panel.table.item(r, 0).text() for r in range(panel.table.rowCount())]  # type: ignore[union-attr]
+    assert names[0] == "MachineCsy"
+    assert names[-1] == "PartCsy"
+
+    async def client() -> IppDmeMachine:
+        machine = await IppDmeMachine.connect("127.0.0.1", port)
+        await machine.start_session()
+        await machine.cart_cmm.set_csy_transformation(
+            "PartCsy", CoordinateTransform(100.0, 50.0, 0.0, 0.0, 0.0, 0.0)
+        )
+        await machine.cart_cmm.set_coord_system("PartCsy")
+        for _ in range(300):
+            if window.twin.snapshot().active_csy == "PartCsy":
+                break
+            await asyncio.sleep(0.01)
+        return machine
+
+    future = window.host.submit(client())
+    while not future.done():
+        _pump(0.02)
+    machine = future.result()
+    window._tick()
+    rows = {
+        panel.table.item(r, 0).text(): panel.table.item(r, 1).text()  # type: ignore[union-attr]
+        for r in range(panel.table.rowCount())
+    }
+    assert rows["PartCsy"] == "active"
+    assert panel.table.item(5, 2).text() == "100.000"  # type: ignore[union-attr]
+    panel.readout_combo.setCurrentText("PartCsy")
+    window._tick()
+    # The machine stands at its zero, which is 100 and 50 mm from the origin of PartCsy.
+    assert "X  -100.000" in window.strip.position.text()
+    assert "Y   -50.000" in window.strip.position.text()
+    panel.table.selectRow(5)
+    assert window.viewport.csy_selected == "PartCsy"
+    panel.show_check.setChecked(False)
+    assert not window.viewport.show_csys
+    assert not window.viewport.render_to_image().isNull()
+    window.host.submit(machine.close()).result(5)

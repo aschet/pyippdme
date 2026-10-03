@@ -524,6 +524,15 @@ builds the command lines of the dialogs, `pyippdme.client.commandform` the forms
 commands, and `pyippdme.client.optical` reads a sensor and acquires points; use them to put
 another interface on the client.
 
+### Coordinate systems
+
+The **Coordinates** tab lists the chain of 6.5.1 (`MachineCsy`, ..., `PartCsy`) with what the
+client placed (`SetCsyTransformation`, `LoadCoordSystem`) and marks the system the client works
+in (`SetCoordSystem`). The systems are drawn as triads with their names in the 3D view (the
+active one bold; a system that coincides with the machine system has no triad of its own),
+and a row picked in the table is drawn bold too. *Show the position in* chooses the system of
+the position above the view; a client works in its own, so this only changes the display.
+
 ### Game controller
 
 In the Teach-in tab, **Game controller** jogs the machine with a pad (any controller SDL2

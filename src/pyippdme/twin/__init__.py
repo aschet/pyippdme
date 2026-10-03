@@ -38,6 +38,7 @@ _EXPORTS = {
     "build_check_artifact": "artifact",
     "build_reference_sphere": "artifact",
     "DigitalTwin": "twin",
+    "CsyFrame": "twin",
     "DrawItem": "twin",
     "TwinEvent": "twin",
     "TwinSnapshot": "twin",
@@ -50,6 +51,7 @@ __all__ = [
     "DEFAULT_TOOLS",
     "PRESETS",
     "Accuracy",
+    "CsyFrame",
     "DigitalTwin",
     "DrawItem",
     "LineScanner",
@@ -79,7 +81,7 @@ if TYPE_CHECKING:
         MachineSpec,
         ToolSpec,
     )
-    from pyippdme.twin.twin import DigitalTwin, DrawItem, TwinEvent, TwinSnapshot
+    from pyippdme.twin.twin import CsyFrame, DigitalTwin, DrawItem, TwinEvent, TwinSnapshot
     from pyippdme.twin.view import SimulationView
 
 

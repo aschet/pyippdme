@@ -71,6 +71,9 @@ class Viewport(QWidget):
         self.target = np.zeros(3)
         self.show_machine = True
         self.machine_opacity = 150
+        self.show_csys = True
+        #: The coordinate system picked in the Coordinates tab; drawn bold.
+        self.csy_selected: str | None = None
         self.show_contacts = True
         self.show_clouds = True
         self.setMinimumSize(480, 360)
@@ -319,6 +322,31 @@ class Viewport(QWidget):
         if np.all(depth > 1.0):
             painter.drawLine(QPointF(*xy[0]), QPointF(*xy[1]))
 
+    def _paint_csys(self, painter: QPainter, view: NDArray[np.float64], length: float) -> None:
+        """Draw a triad and the name of every coordinate system of the chain."""
+        shift = np.asarray(self.view.snapshot().world_shift, dtype=float)
+        colors = (QColor(230, 70, 70), QColor(80, 200, 90), QColor(80, 130, 240))
+        placed: list[tuple[str, NDArray[np.float64]]] = []
+        for frame in self.view.csy_frames():
+            m = np.asarray(frame.matrix, dtype=float)
+            origin = m[:3, 3] + shift
+            at_machine = float(np.linalg.norm(m - np.eye(4))) < 1e-9
+            if at_machine and frame.name != "MachineCsy" and not frame.active:
+                continue  # it coincides with the machine system: one triad is enough
+            bold = frame.active or frame.name == self.csy_selected
+            if frame.name != "MachineCsy":
+                for i, color in enumerate(colors):
+                    painter.setPen(QPen(color, 3 if bold else 1.5))
+                    tip = origin + m[:3, i] * length * 0.8
+                    self._line(painter, view, tuple(origin), tuple(tip))
+            suffix = " (active)" if frame.active else ""
+            placed.append((frame.name + suffix, origin))
+        painter.setPen(QPen(QColor(235, 235, 120)))
+        for i, (label, origin) in enumerate(placed):
+            xy, depth = self._project(np.asarray([origin], dtype=float), view)
+            if depth[0] > 1.0:
+                painter.drawText(QPointF(xy[0, 0] + 6, xy[0, 1] + 14 + 12 * (i % 2)), label)
+
     def _paint_overlay(self, painter: QPainter, view: NDArray[np.float64]) -> None:
         lo, hi = self.view.bounds()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -342,6 +370,8 @@ class Viewport(QWidget):
             if depth[0] > 1.0:
                 painter.drawText(QPointF(xy[0, 0] + 4, xy[0, 1] - 4), label)
 
+        if self.show_csys:
+            self._paint_csys(painter, view, axis_len)
         if self.show_clouds:
             for cloud in list(self.view.clouds):
                 self._points(painter, view, cloud, None)

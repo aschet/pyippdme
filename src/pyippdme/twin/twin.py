@@ -71,7 +71,14 @@ from pyippdme.twin.planning import (
 from pyippdme.twin.spec import ToolSpec
 from pyippdme.twin.toolmath import OPTICAL_MODES, drop, head_rotation, tip_offset
 from pyippdme.twin.tools import ToolKit, ToolModel
-from pyippdme.types.csy import CsyContext, CsyStore, InMemoryCsyStore
+from pyippdme.types.csy import (
+    CSY_CHAIN,
+    CoordinateTransform,
+    CsyContext,
+    CsyStore,
+    InMemoryCsyStore,
+    chain_matrix,
+)
 from pyippdme.types.obb import Obb
 from pyippdme.types.pointcloud import MeasPoint, PointCloud, PointCloudSet, PointSet
 from pyippdme.types.vec3 import Vec3, add, norm, normalize, scale, sub
@@ -124,6 +131,21 @@ class TwinSnapshot:
     changing_tool: str
     #: How far the table frame is displaced in the world, for a machine with a moving table.
     world_shift: Vec3 = (0.0, 0.0, 0.0)
+    #: The coordinate system the client works in (``SetCoordSystem``).
+    active_csy: str = "MachineCsy"
+
+
+@dataclass(frozen=True, slots=True)
+class CsyFrame:
+    """One coordinate system of the chain of 6.5.1, placed in machine coordinates."""
+
+    name: str
+    #: Maps points of this system to machine coordinates.
+    matrix: Matrix
+    #: The client works in this system (``SetCoordSystem``).
+    active: bool
+    #: What the client set with ``SetCsyTransformation``/``LoadCoordSystem``, if anything.
+    placement: CoordinateTransform | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -409,6 +431,24 @@ class DigitalTwin:
         if self.machine.spec.rotary_origin is not None and state.rotary_table.var_csy_enabled:
             var = self.machine.rotary_pose(state.rotary_table.position)
         return CsyContext(state.cart_cmm.active_csy, state.cart_cmm.csy_transformations, var)
+
+    def csy_frames(self) -> list[CsyFrame]:
+        """Return every coordinate system of the chain with its place in the machine."""
+        context = self.csy_context()
+        return [
+            CsyFrame(
+                name,
+                chain_matrix(name, context.transforms, context.rotary_var),
+                name == context.active,
+                context.transforms.get(name),
+            )
+            for name in CSY_CHAIN
+        ]
+
+    def to_csy(self, point: Vec3, name: str) -> Vec3:
+        """Convert a machine point to the coordinate system ``name`` of the chain."""
+        context = self.csy_context()
+        return CsyContext(name, context.transforms, context.rotary_var).to_client(point)
 
     def to_machine(self, point: Vec3, context: CsyContext | None = None) -> Vec3:
         """Convert a point of the client's coordinate system to machine coordinates."""
@@ -1448,6 +1488,7 @@ class DigitalTwin:
             detached=tool_name in self.detached,
             changing_tool=self._changing,
             world_shift=self.machine.world_shift(position),
+            active_csy=self.state.cart_cmm.active_csy if self.state is not None else "MachineCsy",
         )
 
     def draw_items(self) -> list[DrawItem]:

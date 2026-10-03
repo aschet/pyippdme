@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyippdme.gui.csy_panel import CsyPanel
 from pyippdme.gui.icons import app_icon, load_icon
 from pyippdme.gui.library_panel import ToolCreator
 from pyippdme.gui.machine_panel import MachinePanel
@@ -90,6 +91,9 @@ class MainWindow(QMainWindow):
 
         self.scene_panel = ScenePanel(self.twin)
         self.machine_panel = MachinePanel(self.twin)
+        self.csy_panel = CsyPanel(self.twin)
+        self.csy_panel.selected.connect(self._csy_selected)
+        self.csy_panel.show_changed.connect(self._csy_shown)
         self.tool_panel = ToolPanel(self.twin)
         self.tool_creator = ToolCreator(self.twin)
         self.check_panel = CheckPanel(self.twin, lambda: self.host.port)
@@ -166,6 +170,7 @@ class MainWindow(QMainWindow):
         pages.setTabPosition(QTabWidget.TabPosition.North)
         pages.addTab(self.machine_panel, load_icon("machine"), "Machine")
         pages.addTab(tools, load_icon("tool"), "Tools")
+        pages.addTab(self.csy_panel, load_icon("csy"), "Coordinates")
         pages.addTab(self.teach_panel, load_icon("teach"), "Teach-in")
         pages.addTab(self.check_panel, load_icon("check"), "Check")
         pages.addTab(self.safety_panel, load_icon("safety"), "Safety")
@@ -446,9 +451,19 @@ class MainWindow(QMainWindow):
 
     # -- status and events ----------------------------------------------------------------------
 
+    def _csy_selected(self, name: object) -> None:
+        self.viewport.csy_selected = name if isinstance(name, str) else None
+        self.viewport.update()
+
+    def _csy_shown(self, shown: bool) -> None:
+        self.viewport.show_csys = shown
+        self.viewport.update()
+
     def _tick(self) -> None:
         snap = self.twin.snapshot()
-        self.strip.update_from(snap)
+        self.csy_panel.refresh()
+        name = self.csy_panel.readout_combo.currentText()
+        self.strip.update_from(snap, (name, self.twin.to_csy(snap.position, name)))
         self.stats_label.setText(
             f"{len(self.twin.contacts)} probed points, "
             f"{sum(len(c) for c in self.twin.clouds)} scan points"
@@ -465,6 +480,7 @@ class MainWindow(QMainWindow):
             snap.head_position,
             snap.changing_tool,
             self.twin.scene_version,
+            self.csy_panel._signature,
             len(self.twin.contacts),
             len(self.twin.clouds),
         )
