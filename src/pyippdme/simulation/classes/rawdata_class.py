@@ -11,8 +11,12 @@ three transfer technologies it can advertise - binary socket
 (``RawDataBinSetup``/``GetRawDataBin``), OS shared memory
 (``GetRawDataShaMem``/``ReleaseShaMem``), and file
 (``GetRawDataFile``/``DelRawDataFile``); see :mod:`pyippdme.rawdata.transfer`
-for the underlying mechanics and :mod:`pyippdme.types.pointcloud` for the XML
-payload shape (Annex E) these acquisitions are made of.
+for the underlying mechanics. ``AdvDataStruct`` advertises the format ``ESBF``
+and all three technologies deliver an ESBF stream (Annex C.2,
+:mod:`pyippdme.rawdata.formats`). With ``LiveMode(On)`` in ``RawDataBinSetup``,
+``DataAcquire`` sends its points to the port at once, as an ESBF stream
+without a count of point sets, and stores nothing (6.15.1). The acquisitions
+themselves are :mod:`pyippdme.types.pointcloud` point clouds (Annex E).
 
 Scope note on ``DataAcquire``: there is no simulated optical sensor or real
 surface, so "acquiring" synthesizes a plausible point cloud from whatever
@@ -42,8 +46,7 @@ from pyippdme.protocol.errors import ErrorCode, ErrorSeverity, ServerError
 from pyippdme.protocol.signature import DataType, Parameter
 from pyippdme.rawdata.transfer import (
     default_raw_data_directory,
-    flatten_points,
-    pack_samples,
+    esbf_payload,
     port_is_available,
     publish_shared_memory,
     send_once,
@@ -54,15 +57,7 @@ from pyippdme.server._util import bad_argument
 from pyippdme.server.registry import CommandRegistry, HandlerResult
 from pyippdme.simulation.context import Ctx
 from pyippdme.types.pointcloud import MeasPoint, PointCloud, PointCloudSet, PointSet
-from pyippdme.types.pointcloud import to_xml as point_cloud_to_xml
-from pyippdme.types.rawdata import (
-    AdvDataStruct,
-    GenFormat,
-    PixelStructure,
-    PosInformation,
-    SampleStructure,
-    Vector,
-)
+from pyippdme.types.rawdata import AdvDataStruct
 from pyippdme.types.rawdata import to_xml as adv_data_struct_to_xml
 
 _DATA_ACQUIRE_PARAMS = (
@@ -137,11 +132,7 @@ def _synthesize_measurement_points(
 #: three transfer technologies, a generic (TCP-only) sample format.
 _ADV_DATA_STRUCT = AdvDataStruct(
     return_technologies=frozenset({"SocBin", "ShaMem", "File"}),
-    format=GenFormat(
-        pos_information=PosInformation(tcp=Vector(0.0, 0.0, 0.0)),
-        pixel_structure=PixelStructure(bits_per_color_channel=0, num_color_channels=0),
-        sample_structure=SampleStructure(()),
-    ),
+    format="ESBF",
 )
 
 
@@ -192,7 +183,17 @@ async def _data_acquire(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
         direction=directions[0],
         points=_synthesize_measurement_points(acq_name, acquisition_type, positions),
     )
-    ctx.state.raw_data.acquisitions[acq_name] = PointCloudSet((PointCloud((point_set,)),))
+    acquired = PointCloudSet((PointCloud((point_set,)),))
+    raw_data = ctx.state.raw_data
+    if raw_data.bin_live and raw_data.bin_format is not None and raw_data.bin_port is not None:
+        # 6.15.1: "The result of the acquisition command will be stored under a distinct
+        # identifier unless Livemode ON was specified in a preceding RawDataBinSetup()" -
+        # the points are sent block-wise instead (6.17.2.1), here as one ESBF stream
+        # without a count of point sets.
+        payload = esbf_payload(acquired, raw_data.bin_format, counted=False)
+        await send_once(_ANY_INTERFACE, raw_data.bin_port, payload, network=ctx.network)
+        return None
+    raw_data.acquisitions[acq_name] = acquired
     return None
 
 
@@ -240,6 +241,7 @@ async def _raw_data_bin_setup(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerRe
         )
     ctx.state.raw_data.bin_format = data_format
     ctx.state.raw_data.bin_port = port
+    ctx.state.raw_data.bin_live = live_mode == "On"
     return None
 
 
@@ -252,7 +254,7 @@ async def _get_raw_data_bin(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResu
             CommandName.GET_RAW_DATA_BIN,
             "RawDataBinSetup was not called",
         )
-    payload = pack_samples(flatten_points(data), ctx.state.raw_data.bin_format)
+    payload = esbf_payload(data, ctx.state.raw_data.bin_format)
     # "0.0.0.0": accept the client's connection to the negotiated port on any
     # interface, matching the "different computers" cross-machine use case
     # RawDataBinSetup's Port parameter exists for.
@@ -262,7 +264,7 @@ async def _get_raw_data_bin(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResu
 
 async def _get_raw_data_sha_mem(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     acq_name, data = _require_acquisition(ctx, args, CommandName.GET_RAW_DATA_SHA_MEM)
-    payload = pack_samples(flatten_points(data), "double")
+    payload = esbf_payload(data, "double")
     try:
         segment = publish_shared_memory(payload)
     except OSError as exc:
@@ -293,8 +295,7 @@ async def _release_sha_mem(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResul
 async def _get_raw_data_file(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     acq_name, data = _require_acquisition(ctx, args, CommandName.GET_RAW_DATA_FILE)
     directory = default_raw_data_directory()
-    payload = point_cloud_to_xml(data).encode("utf-8")
-    path = write_raw_data_file(directory, acq_name, payload, ".xml")
+    path = write_raw_data_file(directory, acq_name, esbf_payload(data, "double"), ".esbf")
     ctx.state.raw_data.files[acq_name] = path
     # FileURL is documented as kind [name] (Table 103), but a file:// URL
     # contains characters (':', '/') the [name] grammar (a bare identifier)

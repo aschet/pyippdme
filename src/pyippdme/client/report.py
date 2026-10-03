@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 
-from pyippdme.protocol.ast import DataPayload, Items, NamedValue, Number, String
+from pyippdme.protocol.ast import BasicName, DataPayload, Items, NamedValue, Number, String
 
-ReportValue = float | str | tuple[float, ...]
+#: ``None`` stands for the ``NULL`` a server reports for information it cannot deliver (6.10.2).
+ReportValue = float | str | tuple[float, ...] | None
 
 
 class Report(Mapping[str, ReportValue]):
@@ -69,6 +70,8 @@ def _value(named: NamedValue) -> ReportValue:
         return numbers[0] if len(numbers) == 1 else numbers
     if len(args) == 1 and isinstance(args[0], String):
         return args[0].value
+    if len(args) == 1 and isinstance(args[0], BasicName) and args[0].value == "NULL":
+        return None
     raise TypeError(f"Expected numbers or one string for {named.name!r}")
 
 

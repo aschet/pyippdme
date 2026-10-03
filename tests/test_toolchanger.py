@@ -25,7 +25,7 @@ from pyippdme.protocol.commands import CommandName
 async def test_enum_tools_lists_the_catalog(started_client: IppDmeClient) -> None:
     data = await started_client.call(CommandName.ENUM_TOOLS)
     names = {item.value for item in data if isinstance(item, NameValue)}
-    assert names == {"RefTool", "RefTool2", "AlignProbe"}
+    assert names == {"RefTool", "RefTool2", "AlignProbe", "NoTool"}
 
 
 async def test_active_tool_defaults_to_ref_tool(started_client: IppDmeClient) -> None:
@@ -62,10 +62,11 @@ async def test_set_tool_rejects_unknown_tool(started_client: IppDmeClient) -> No
     assert excinfo.value.error.number == "1502"
 
 
-async def test_found_tool_defaults_to_no_tool(started_client: IppDmeClient) -> None:
+async def test_found_tool_defaults_to_undef_tool(started_client: IppDmeClient) -> None:
+    # 6.22.1: "FoundTool() is only valid after a call to FindTool(), otherwise it is UnDefTool".
     (data,) = await started_client.call(CommandName.FOUND_TOOL)
     assert isinstance(data, NameValue)
-    assert data.value == "NoTool"
+    assert data.value == "UnDefTool"
 
 
 async def test_find_tool_then_found_tool(started_client: IppDmeClient) -> None:
@@ -126,7 +127,12 @@ async def test_enum_tool_collection_lists_the_catalog(started_client: IppDmeClie
     pairs = {
         (item.first.value, item.second.value) for item in data if isinstance(item, PropertyData)
     }
-    assert pairs == {("RefTool", "Tool"), ("RefTool2", "Tool"), ("AlignProbe", "Tool")}
+    assert pairs == {
+        ("RefTool", "Tool"),
+        ("RefTool2", "Tool"),
+        ("AlignProbe", "Tool"),
+        ("NoTool", "Tool"),
+    }
 
 
 async def test_enum_tool_collection_unknown_node_errors(started_client: IppDmeClient) -> None:
@@ -151,7 +157,7 @@ async def test_enum_all_tool_collections_matches_enum_tool_collection(
     assert (
         flat_pairs
         == recursive_pairs
-        == {("RefTool", "Tool"), ("RefTool2", "Tool"), ("AlignProbe", "Tool")}
+        == {("RefTool", "Tool"), ("RefTool2", "Tool"), ("AlignProbe", "Tool"), ("NoTool", "Tool")}
     )
 
 

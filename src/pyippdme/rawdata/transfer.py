@@ -9,9 +9,9 @@ Each function here implements one of the transfer technologies
 a binary TCP socket (6.17.2.1), OS shared memory (6.17.2.2, via the
 standard library's cross-platform ``multiprocessing.shared_memory``, so it
 works unmodified on both Linux and Windows), and a plain file (6.17.2.3).
-All three serialize a :class:`~pyippdme.types.pointcloud.PointCloudSet` as flat
-``(x, y, z)`` float32/float64 samples, little-endian ("Intel format"),
-matching 6.17.2.1's ``RawDataBinSetup`` wire format description.
+All three carry a :class:`~pyippdme.types.pointcloud.PointCloudSet` as an ESBF
+stream (Annex C.2, :mod:`pyippdme.rawdata.formats`) of ``float`` or ``double``
+values, little-endian ("Intel format", 6.17.2.1).
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ import numpy as np
 import numpy.typing as npt
 
 from pyippdme.protocol.network import TCP_NETWORK, Network, StreamReaderLike, StreamWriterLike
+from pyippdme.rawdata.formats import PointSetData, ScanData, pack_esbf, unpack_esbf
 from pyippdme.types.pointcloud import PointCloudSet
 
 #: How long a binary-socket listener waits for the client to connect before
@@ -32,39 +33,26 @@ from pyippdme.types.pointcloud import PointCloudSet
 #: production default).
 BIN_SOCKET_ACCEPT_TIMEOUT = 30.0
 
-#: The little-endian dtype :func:`pack_samples`/:func:`unpack_samples` use for
-#: each wire ``data_format`` (6.17.2.1: "float" is 32-bit, "double" 64-bit).
-_SAMPLE_DTYPES: dict[str, npt.DTypeLike] = {"float": "<f4", "double": "<f8"}
 
-
-def flatten_points(data: PointCloudSet) -> npt.NDArray[np.float64]:
-    """Flatten every ``(x, y, z)`` sample into one array, in document order."""
-    values = [
-        (point.x, point.y, point.z)
+def point_groups(data: PointCloudSet) -> tuple[tuple[PointSetData, ...], ...]:
+    """Turn the point clouds into SBF/ESBF point groups: one group per cloud, one set per set."""
+    return tuple(
+        tuple(
+            PointSetData(
+                point_set.normal,
+                np.asarray([(p.x, p.y, p.z) for p in point_set.points], dtype=np.float64).reshape(
+                    -1, 3
+                ),
+            )
+            for point_set in cloud.point_sets
+        )
         for cloud in data.point_clouds
-        for point_set in cloud.point_sets
-        for point in point_set.points
-    ]
-    if not values:
-        return np.empty(0, dtype=np.float64)
-    return np.asarray(values, dtype=np.float64).reshape(-1)
+    )
 
 
-def pack_samples(values: npt.NDArray[np.float64], data_format: str) -> bytes:
-    """Pack ``values`` as little-endian IEEE 754 ``float``/``double`` (6.17.2.1)."""
-    if data_format not in _SAMPLE_DTYPES:
-        raise ValueError(f"data_format must be 'float' or 'double', got {data_format!r}")
-    return np.asarray(values, dtype=_SAMPLE_DTYPES[data_format]).tobytes()
-
-
-def unpack_samples(payload: bytes, data_format: str) -> npt.NDArray[np.float64]:
-    """Unpack little-endian ``float``/``double`` samples (6.17.2.1) into rows of ``(x, y, z)``."""
-    if data_format not in _SAMPLE_DTYPES:
-        raise ValueError(f"data_format must be 'float' or 'double', got {data_format!r}")
-    samples = np.frombuffer(payload, dtype=_SAMPLE_DTYPES[data_format]).astype(np.float64)
-    if samples.size % 3:
-        raise ValueError(f"Expected a multiple of 3 samples, got {samples.size}")
-    return samples.reshape(-1, 3)
+def esbf_payload(data: PointCloudSet, data_format: str, *, counted: bool = True) -> bytes:
+    """Serialize ``data`` as an ESBF stream (Annex C.2), the format all transfers here use."""
+    return pack_esbf(point_groups(data), data_format, description="pyippdme", counted=counted)
 
 
 async def read_samples(
@@ -75,11 +63,23 @@ async def read_samples(
     network: Network = TCP_NETWORK,
     timeout: float = 5.0,
 ) -> npt.NDArray[np.float64]:
-    """Connect to a server's raw-data port, read until it closes, and unpack the samples.
+    """Connect to a server's raw-data port, read until it closes, and return all points.
 
-    The server only listens while a ``GetRawDataBin`` is running, so connection
-    attempts are retried until ``timeout`` seconds have passed.
+    The stream is ESBF (Annex C.2); ``data_format`` is what ``RawDataBinSetup``
+    asked for and is checked against the stream's own header. The server only
+    listens while a ``GetRawDataBin`` is running, so connection attempts are
+    retried until ``timeout`` seconds have passed.
     """
+    scan = await read_scan_data(host, port, network=network, timeout=timeout)
+    if scan.data_format != data_format:
+        raise ValueError(f"Expected {data_format!r} samples, the stream holds {scan.data_format!r}")
+    return scan.points()
+
+
+async def read_scan_data(
+    host: str, port: int, *, network: Network = TCP_NETWORK, timeout: float = 5.0
+) -> ScanData:
+    """Like :func:`read_samples`, but return the point groups and sets of the ESBF stream."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while True:
@@ -95,7 +95,7 @@ async def read_samples(
     finally:
         writer.close()
         await writer.wait_closed()
-    return unpack_samples(payload, data_format)
+    return unpack_esbf(payload)
 
 
 async def port_is_available(host: str, port: int, *, network: Network = TCP_NETWORK) -> bool:

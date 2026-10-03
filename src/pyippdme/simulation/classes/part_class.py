@@ -67,6 +67,12 @@ def _property_children(ctx: Ctx, reference: str) -> tuple[tuple[str, str], ...] 
     return tuple((name.removeprefix("Part."), PropertyKind.NUMBER) for name in _DEFAULTS)
 
 
+def _reset_on_start_session(ctx: Ctx) -> None:
+    # 6.24.2: each property has a documented default "after a StartSession()".
+    ctx.state.part.properties.clear()
+
+
 def register(registry: CommandRegistry) -> None:
+    registry.register_session_start_hook(_reset_on_start_session)
     registry.register_property_resolver(setter=_try_set, getter=_try_get)
     registry.register_property_children(_property_children)

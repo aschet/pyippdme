@@ -29,18 +29,27 @@ active, exactly as on :class:`~pyippdme.server.IppDmeServer`.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Sequence
 
+from pyippdme.protocol.ast import Items, NamedValue, Number, String, Tag
+from pyippdme.protocol.commands import CommandName
 from pyippdme.protocol.hooks import LineHook
 from pyippdme.protocol.network import TCP_NETWORK, Network
 from pyippdme.server import IppDmeServer
+from pyippdme.server import builders as server_builders
+from pyippdme.server._util import generic_set_prop
 from pyippdme.server.backend import MachineBackend
-from pyippdme.server.registry import CommandRegistry, component_name
+from pyippdme.server.registry import CommandContext, CommandRegistry, component_name
 from pyippdme.server.surface import SampleSurface
 from pyippdme.simulation import DEFAULT_COMMAND_CLASSES
 from pyippdme.simulation.backend import SimulatedBackend
+from pyippdme.simulation.classes.cartcmm_class import pt_meas_fields
+from pyippdme.simulation.classes.tool_class import DEFAULT_TOOL_COLLECTION, TOOL_CATALOG
+from pyippdme.simulation.classes.toolchanger_class import activate_tool
 from pyippdme.simulation.state import SimulationState
 from pyippdme.types.csy import CsyStore, FileCsyStore
+from pyippdme.types.vec3 import Vec3
 
 #: 6.4.1's naming scheme's four purely presence-based top-level objects:
 #: each becomes its class name if the matching ``--components``/
@@ -138,3 +147,83 @@ class VirtualCMM(IppDmeServer[SimulationState]):
             on_connect=on_connect,
             on_disconnect=on_disconnect,
         )
+
+    # -- events the server sends on its own (5.5.3) ----------------------------------
+
+    def _context(self, state: SimulationState) -> CommandContext[SimulationState]:
+        return CommandContext(
+            tag=Tag.of(1),
+            state=state,
+            registry=self.registry,
+            backend=self.backend,
+            csy_store=self.csy_store,
+            cancel=asyncio.Event(),
+            sample_surface=self.sample_surface,
+            network=self.network,
+        )
+
+    async def key_press(self, key: str) -> bool:
+        """Press a key on the virtual jog box; the client gets ``KeyPress(key)``.
+
+        The event is sent only while the user is enabled (5.5.3); returns
+        whether it was sent.
+        """
+        state = self.active_state
+        if state is None or not state.mover.user_enabled:
+            return False
+        return await self.send_event(server_builders.key_press(key))
+
+    async def clearance_point(self, x: float, y: float, z: float) -> bool:
+        """Set a clearance point by hand: the machine moves there; the client gets ``GoTo(...)``."""
+        return await self._point_event(
+            (x, y, z), server_builders.clearance_point, direction=(0.0, 0.0, 0.0)
+        )
+
+    async def manual_point(self, x: float, y: float, z: float, ijk: Vec3 = (0.0, 0.0, 0.0)) -> bool:
+        """Pick a point by hand: the client gets ``PtMeas(...)`` with the report fields."""
+        return await self._point_event((x, y, z), server_builders.manual_point, direction=ijk)
+
+    async def _point_event(
+        self,
+        position: Vec3,
+        build: Callable[..., Items],
+        *,
+        direction: Vec3,
+    ) -> bool:
+        state = self.active_state
+        if state is None or not state.mover.user_enabled:
+            return False
+        state.cart_cmm.position = position
+        fields = pt_meas_fields(self._context(state), position, direction, CommandName.PT_MEAS)
+        values = {f.name: tuple(a.value for a in f.args if isinstance(a, Number)) for f in fields}
+        return await self.send_event(
+            build(**{name: (v[0] if len(v) == 1 else v) for name, v in values.items()})
+        )
+
+    async def change_tool(self, tool_name: str) -> bool:
+        """Change the tool at the machine: the client gets ``ChangeTool(ToolName)`` (5.5.3)."""
+        state = self.active_state
+        if state is None or tool_name not in TOOL_CATALOG:
+            return False
+        activate_tool(self._context(state), tool_name)
+        return await self.send_event(server_builders.tool_changed(tool_name))
+
+    async def open_tool_collection(self, path: str) -> bool:
+        """Open a tool collection at the machine: the client gets ``OpenToolCollection(path)``."""
+        state = self.active_state
+        if state is None or path != DEFAULT_TOOL_COLLECTION:
+            return False
+        return await self.send_event(server_builders.tool_collection_opened(path))
+
+    async def set_property(self, name: str, *values: float | str) -> bool:
+        """Change a property at the machine: the client gets ``SetProp(name(values))`` (5.5.3)."""
+        state = self.active_state
+        if state is None:
+            return False
+        argument = NamedValue(
+            name, tuple(String(v) if isinstance(v, str) else Number.of(v) for v in values)
+        )
+        ctx = self._context(state)
+        if not any(setter(ctx, argument) for setter in self.registry.property_setters()):
+            generic_set_prop(ctx, (argument,))
+        return await self.send_event(server_builders.property_set(name, *values))

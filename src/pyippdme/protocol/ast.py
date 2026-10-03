@@ -354,7 +354,7 @@ class NameValue:
     value: str
 
     def __post_init__(self) -> None:
-        _require(_BASIC_NAME_RE.match(self.value) is not None, f"Invalid name {self.value!r}")
+        _require(_NAME_RE.match(self.value) is not None, f"Invalid name {self.value!r}")
 
     def to_wire(self) -> str:
         return self.value

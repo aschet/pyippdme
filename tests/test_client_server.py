@@ -76,7 +76,7 @@ async def test_get_dme_version(client: IppDmeClient) -> None:
     await client.start_session()
     (data,) = await client.call(CommandName.GET_DME_VERSION)
     (version,) = _items(data).values
-    assert version.name == "DMEVersion"
+    assert version.name == "GetDMEVersion"  # Table 22: Kind N*
     assert version.args == (String("2.5"),)
 
 
@@ -140,7 +140,7 @@ async def test_get_prop_unknown(client: IppDmeClient) -> None:
     await client.start_session()
     with pytest.raises(IppDmeServerError) as excinfo:
         await client.call(CommandName.GET_PROP, NamedValue("NoSuchProperty", ()))
-    assert excinfo.value.error.number == "0510"
+    assert excinfo.value.error.number == "0505"
 
 
 async def test_unsupported_command(client: IppDmeClient) -> None:
@@ -217,4 +217,12 @@ async def test_set_coord_system_rejects_unknown_name(client: IppDmeClient) -> No
     await client.start_session()
     with pytest.raises(IppDmeServerError) as excinfo:
         await client.call(CommandName.SET_COORD_SYSTEM, BasicName("NotACsy"))
+    assert excinfo.value.error.number == "0505"
+
+
+async def test_set_prop_unknown_name_is_not_recognized(client: IppDmeClient) -> None:
+    """5.6 / 6.3.1.1: a name that is neither a standard nor a proprietary property is 0505."""
+    await client.start_session()
+    with pytest.raises(IppDmeServerError) as excinfo:
+        await client.set_prop(NamedValue("NoSuchProperty", (Number.of(1),)))
     assert excinfo.value.error.number == "0505"

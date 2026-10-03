@@ -63,6 +63,9 @@ class IppDmeClient:
         self._next_command_tag = 1
         self._next_event_tag = 1
         self._unsolicited: asyncio.Queue[DataResponse | None] = asyncio.Queue()
+        #: 5.4.3: "A client is not allowed to start a new transaction until it received
+        #: the acknowledgement response of the most recent sent command line."
+        self._ack_gate = asyncio.Lock()
         self._reader_task = asyncio.create_task(self._reader_loop())
 
     @classmethod
@@ -130,11 +133,33 @@ class IppDmeClient:
         self._transport.write_line(encode_line(command))
         return txn
 
+    async def _send_acknowledged(
+        self, name: str, args: tuple[Argument, ...], tag: TagLike | None = None
+    ) -> Transaction:
+        """Send a command once the previous one was acknowledged, and wait for its Ack.
+
+        Commands for prioritized execution (name ending in ``E``, 5.7) go
+        out at once: they exist to get past a queue the server may still be
+        working through, such as an ``AbortE()`` during a scan.
+        """
+        if name.endswith("E"):
+            txn = self.send(name, *args, tag=tag)
+            await self._transport.drain()
+            await txn.wait_ack()
+            return txn
+        async with self._ack_gate:
+            txn = self.send(name, *args, tag=tag)
+            await self._transport.drain()
+            await txn.wait_ack()
+        return txn
+
     async def call(self, name: str, *args: Argument) -> tuple[DataPayload, ...]:
-        """Send a command and wait for it to complete, returning its data."""
-        txn = self.send(name, *args)
-        await self._transport.drain()
-        await txn.wait_ack()
+        """Send a command and wait for it to complete, returning its data.
+
+        Commands wait for the Ack of the one before them (5.4.3), so
+        calls made at the same time are sent one after another.
+        """
+        txn = await self._send_acknowledged(name, args)
         return await txn.wait_complete()
 
     async def call_streaming(self, name: str, *args: Argument) -> AsyncIterator[DataPayload]:
@@ -145,17 +170,13 @@ class IppDmeClient:
         results incrementally (e.g. ``ScanOnLine``); see
         :meth:`~pyippdme.client.transaction.Transaction.stream`.
         """
-        txn = self.send(name, *args)
-        await self._transport.drain()
-        await txn.wait_ack()
+        txn = await self._send_acknowledged(name, args)
         async for payload in txn.stream():
             yield payload
 
     async def start_daemon(self, name: str, *args: Argument) -> Transaction:
         """Send an event-tagged command that starts a daemon (5.5.2)."""
-        txn = self.send(name, *args, tag=self.allocate_event_tag())
-        await self._transport.drain()
-        await txn.wait_ack()
+        txn = await self._send_acknowledged(name, args, self.allocate_event_tag())
         await txn.wait_complete()
         return txn
 
@@ -223,9 +244,15 @@ class IppDmeClient:
         if isinstance(response, AckResponse):
             txn._on_ack()
         elif isinstance(response, DoneResponse):
+            one_shot = isinstance(tag, EventTag) and txn.received_data
             txn._on_done()
             if isinstance(tag, Tag):
                 self._pending.pop(tag.to_wire(), None)
+            elif one_shot:
+                # 5.5.1/5.5.2: a one-shot event is sent before the transaction completes,
+                # and its daemon dies after firing.
+                self._pending.pop(tag.to_wire(), None)
+                txn._on_close()
         elif isinstance(response, DataResponse):
             txn._on_data(response.data)
         elif isinstance(response, ErrorResponse):

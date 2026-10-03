@@ -92,7 +92,7 @@ async def run_command_line(client: IppDmeClient, text: str) -> AsyncIterator[Com
     A recognized daemon-starting command (:data:`_DAEMON_STARTING_COMMANDS`)
     is sent tagged with a fresh ``EventTag`` instead of the usual numbered
     ``Tag`` - without this, e.g. ``OnMoveReportE(...)`` would be rejected
-    outright (6.7.1 requires an ``EventTag``), and a later
+    outright (a daemon needs an ``EventTag``, 5.5.2), and a later
     ``StopDaemon(<that tag>)`` in the same live session would have nothing
     to reference.
 

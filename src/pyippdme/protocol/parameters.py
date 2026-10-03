@@ -45,8 +45,8 @@ class ParameterName(StrEnum):
     """Every atomic ``NamedValue``/``BasicName`` identifier a built-in class uses on the wire."""
 
     # Coordinate axes / RotaryTable (GoTo/Get/PtMeas/Step/OnPtMeasReport, 6.5/6.8/6.12/6.23).
-    # Q/ER are OnScanReport/OnPtMeasReport-only report fields (6.10.2, Tables
-    # 65/66), not settable axes.
+    # ER and Q are OnScanReport/OnPtMeasReport-only report fields (6.10.2, Tables
+    # 66 and 70), not settable axes.
     X = "X"
     Y = "Y"
     Z = "Z"
@@ -65,7 +65,7 @@ class ParameterName(StrEnum):
     # Circular/spiral/helical motion and scanning geometry (6.8.1, 6.13.2.1).
     CENTER = "Center"
     IJK = "IJK"
-    # OnPtMeasReport/OnScanReport-only report field (6.12.1/6.13.2, Tables 75/78).
+    # OnPtMeasReport/OnScanReport-only report field (Table 32; Tables 75/78 list it).
     IJK_ACT = "IJKAct"
     # PtMeasSelfCenterLocked's plane-constraint vector (6.14.1).
     LMN = "LMN"
@@ -82,9 +82,6 @@ class ParameterName(StrEnum):
     ANGLE = "Angle"
     ANGLE_BASE_LENGTH = "AngleBaseLength"
     AT_NOMINALS = "AtNominals"
-
-    # DME (6.4): GetDMEVersion's response field.
-    DME_VERSION = "DMEVersion"
 
     # Server (6.3.1): GetXtdErrStatus's per-error response fields.
     ACTIVE_ERROR = "ActiveError"

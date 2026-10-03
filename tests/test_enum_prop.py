@@ -99,3 +99,18 @@ async def test_enum_all_prop_tool_covers_every_block(started_client: IppDmeClien
     assert "ScanPar" in names
     # Every leaf parameter's Min/Max/Def/Act should appear too.
     assert names.count("Min") == 10  # 2 (GoToPar) + 5 (PtMeasPar) + 3 (ScanPar) parameters
+
+
+async def test_enum_prop_lists_the_pointers_of_cart_cmm(started_client: IppDmeClient) -> None:
+    """6.5.3: CartCMM points to ToolChanger, Tool, RotaryTable and Part."""
+    data = await started_client.call(CommandName.ENUM_PROP, NamedValue("CartCMM", ()))
+    names = {item.first.value for item in data if isinstance(item, PropertyData)}
+    assert names == {"ToolChanger", "Tool", "RotaryTable", "Part"}
+
+
+async def test_classes_without_properties_enumerate_as_empty(started_client: IppDmeClient) -> None:
+    """6.22.2, 6.23.2 and 6.18.2: ToolChanger, RotaryTable and AlignMode have no properties."""
+    for reference in ("ToolChanger", "RotaryTable", "Tool.AlignMode"):
+        assert await started_client.call(CommandName.ENUM_PROP, NamedValue(reference, ())) == ()
+    all_tool = await started_client.call(CommandName.ENUM_ALL_PROP, NamedValue("Tool", ()))
+    assert any(isinstance(i, PropertyData) and i.first.value == "AlignMode" for i in all_tool)

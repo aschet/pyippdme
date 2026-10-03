@@ -70,11 +70,29 @@ async def test_align_part_rejects_zero_vector(started_client: IppDmeClient) -> N
     assert excinfo.value.error.number == "1010"
 
 
-async def test_align_part_rejects_second_rotary_table(started_client: IppDmeClient) -> None:
-    args = [Number.of(v) for v in (1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0)]
+async def test_align_part_aligns_a_second_rotary_table(started_client: IppDmeClient) -> None:
+    args = [Number.of(v) for v in (1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0)]
+    (data,) = await started_client.call(CommandName.ALIGN_PART, *args)
+    numbers = [float(n) for n in data.to_wire().split(",")]
+    # Returns the projected, normalized vectors, "same number as set" (6.23.1).
+    assert numbers == pytest.approx([1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1])
+
+
+async def test_align_part_second_table_needs_all_its_values(started_client: IppDmeClient) -> None:
+    args = [Number.of(v) for v in (1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0)]  # beta missing
     with pytest.raises(IppDmeServerError) as excinfo:
         await started_client.call(CommandName.ALIGN_PART, *args)
-    assert excinfo.value.error.number == "0506"
+    assert excinfo.value.error.number == "0509"
+
+
+async def test_align_part_second_table_reports_part_not_aligned(
+    started_client: IppDmeClient,
+) -> None:
+    # A negative allowed error angle can never be met.
+    args = [Number.of(v) for v in (1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, -1)]
+    with pytest.raises(IppDmeServerError) as excinfo:
+        await started_client.call(CommandName.ALIGN_PART, *args)
+    assert excinfo.value.error.number == "2506"
 
 
 def test_math_sanity_for_align_angle() -> None:

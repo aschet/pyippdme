@@ -127,8 +127,8 @@ def property_entry(name: str, kind: str) -> PropertyData:
 
 
 def get_dme_version(version: str) -> Items:
-    """``GetDMEVersion()``'s response shape (6.4.1)."""
-    return Items((NamedValue(ParameterName.DME_VERSION, (String(version),)),))
+    """``GetDMEVersion()``'s response shape (Table 22: Kind N*, named after the command)."""
+    return Items((NamedValue(CommandName.GET_DME_VERSION, (String(version),)),))
 
 
 def get_xtd_err_status(*, homed: bool, error: tuple[int, int] | None = None) -> list[Items]:
@@ -190,13 +190,22 @@ def temperature_reading(name: str, temperature: float) -> Items:
     )
 
 
-def align_part(part_xy: tuple[float, float], machine_xy: tuple[float, float]) -> NumericData:
-    """``AlignPart(...)``'s response shape (6.23): the two projected, normalized XY vectors.
+def align_part(
+    part_xy: tuple[float, float],
+    machine_xy: tuple[float, float],
+    second_part_yz: tuple[float, float] | None = None,
+    second_machine_yz: tuple[float, float] | None = None,
+) -> NumericData:
+    """``AlignPart(...)``'s response shape (6.23.1): the projected, normalized vectors.
 
-    Each is reported as a full 3-number vector with a ``0.0`` Z, matching
-    the request's own ``(px1, py1, pz1, mx1, my1, mz1, alpha)`` shape.
+    The vectors of the first rotary table are projected on the XY plane and
+    those of the second, orthogonal one on the YZ plane; each is reported as
+    a full 3-number vector, matching the request's own shape.
     """
-    return NumericData(tuple(Number.of(v) for v in (*part_xy, 0.0, *machine_xy, 0.0)))
+    numbers = [*part_xy, 0.0, *machine_xy, 0.0]
+    if second_part_yz is not None and second_machine_yz is not None:
+        numbers += [0.0, *second_part_yz, 0.0, *second_machine_yz]
+    return NumericData(tuple(Number.of(v) for v in numbers))
 
 
 def get_change_tool_action(dx: float, dy: float, dz: float, *, action: str = "Switch") -> Items:
@@ -212,7 +221,7 @@ def get_change_tool_action(dx: float, dy: float, dz: float, *, action: str = "Sw
 
 
 def get_raw_data_sha_mem(name: str, data_segment: int, size: int) -> Items:
-    """``GetRawDataShaMem(...)``'s response shape (6.15.1.1)."""
+    """``GetRawDataShaMem(...)``'s response shape (6.17.2.2)."""
     return Items(
         (
             NamedValue(ParameterName.SHA_MEM_NAME, (String(name),)),
@@ -223,5 +232,56 @@ def get_raw_data_sha_mem(name: str, data_segment: int, size: int) -> Items:
 
 
 def get_raw_data_file(url: str) -> Items:
-    """``GetRawDataFile(...)``'s response shape (6.15.1.1)."""
+    """``GetRawDataFile(...)``'s response shape (6.17.2.3)."""
     return Items((NamedValue(ParameterName.FILE_URL, (String(url),)),))
+
+
+# ---------------------------------------------------------------------------
+# Pre-defined unsolicited server events (5.5.3), sent with ``IppDmeServer.send_event``.
+# ---------------------------------------------------------------------------
+
+
+def key_press(name: str) -> Items:
+    """``KeyPress(NameOfKey)``: a key was pressed on the jog box (5.5.3)."""
+    return Items((NamedValue("KeyPress", (String(name),)),))
+
+
+def _report_event(name: str, **values: float | tuple[float, ...]) -> Items:
+    arguments = tuple(
+        NamedValue(
+            field,
+            tuple(Number.of(v) for v in (value if isinstance(value, tuple) else (value,))),
+        )
+        for field, value in values.items()
+    )
+    return Items((NamedValue(name, arguments),))
+
+
+def clearance_point(**values: float | tuple[float, ...]) -> Items:
+    """``GoTo(...)``: the user set a clearance or intermediate point (5.5.3).
+
+    The fields are those of ``OnPtMeasReport``; vectors such as ``IJK`` are
+    to be ``(0, 0, 0)``.
+    """
+    return _report_event("GoTo", **values)
+
+
+def manual_point(**values: float | tuple[float, ...]) -> Items:
+    """``PtMeas(...)``: the user picked a point by hand (5.5.3); fields as ``OnPtMeasReport``."""
+    return _report_event("PtMeas", **values)
+
+
+def tool_changed(tool_name: str) -> Items:
+    """``ChangeTool(ToolName)``: the tool was changed without a command from the client (5.5.3)."""
+    return Items((NamedValue("ChangeTool", (String(tool_name),)),))
+
+
+def property_set(name: str, *values: float | str) -> Items:
+    """``SetProp(...)``: a property changed without a command from the client (5.5.3)."""
+    arguments = tuple(String(v) if isinstance(v, str) else Number.of(v) for v in values)
+    return Items((NamedValue("SetProp", (NamedValue(name, arguments),)),))
+
+
+def tool_collection_opened(path: str) -> Items:
+    """``OpenToolCollection(ToolCollectionPath)``: the server changed the collection (5.5.3)."""
+    return Items((NamedValue("OpenToolCollection", (String(path),)),))

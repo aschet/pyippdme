@@ -76,7 +76,7 @@ def test_supported_arguments_builds_one_pair_per_parameter() -> None:
 
 def test_get_dme_version_builds_a_single_named_string() -> None:
     assert builders.get_dme_version("6.0") == Items(
-        (NamedValue(ParameterName.DME_VERSION, (String("6.0"),)),)
+        (NamedValue(CommandName.GET_DME_VERSION, (String("6.0"),)),)
     )
 
 

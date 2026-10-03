@@ -60,10 +60,10 @@ async def test_enum_name_spaces_is_empty_without_proprietary_namespaces(
 
 
 async def test_properties_can_be_written_and_read_by_name(machine: IppDmeMachine) -> None:
-    await machine.server.set_prop("Custom.Number", 1.5)
-    await machine.server.set_prop("Custom.Text", "hello")
-    assert await machine.server.get_prop("Custom.Number") == 1.5
-    assert await machine.server.get_prop_e("Custom.Text") == "hello"
+    await machine.server.set_prop("XXCustom.Number", 1.5)
+    await machine.server.set_prop("XXCustom.Text", "hello")
+    assert await machine.server.get_prop("XXCustom.Number") == 1.5
+    assert await machine.server.get_prop_e("XXCustom.Text") == "hello"
 
 
 async def test_session_commands_are_available_on_the_server_namespace(
@@ -159,9 +159,9 @@ async def test_optimize_flag_and_smallest_angle(machine: IppDmeMachine) -> None:
 async def test_tool_geometry_queries(machine: IppDmeMachine) -> None:
     await machine.tool_changer.change_tool("AlignProbe")
     assert await machine.tool.avr_radius() == 0.0
-    assert await machine.tool.avr_offsets() == (0.0, 0.0, 0.0)
-    assert await machine.tool.collision_volume() == ()
-    assert await machine.tool.alignment_volume() == ()
+    assert await machine.tool.get_avr_offsets() == (0.0, 0.0, 0.0)
+    assert await machine.tool.get_collision_volume() == ()
+    assert await machine.tool.get_alignment_volume() == ()
     await machine.tool.re_qualify()
 
 
@@ -278,15 +278,6 @@ async def test_read_samples_gives_up_when_nothing_listens(network: MemoryNetwork
         await read_samples("x", 5002, "double", network=network, timeout=0.05)
 
 
-def test_unpack_samples_rejects_bad_input() -> None:
-    from pyippdme.rawdata.transfer import unpack_samples
-
-    with pytest.raises(ValueError, match="data_format"):
-        unpack_samples(b"", "triple")
-    with pytest.raises(ValueError, match="multiple of 3"):
-        unpack_samples(b"\x00" * 16, "double")
-
-
 # -- Tool and FoundTool properties ---------------------------------------------
 
 
@@ -309,7 +300,7 @@ async def test_alignment_property_of_an_alignable_tool(machine: IppDmeMachine) -
 
 
 async def test_found_tool_properties(machine: IppDmeMachine) -> None:
-    assert await machine.found_tool.get_name() == "NoTool"
+    assert await machine.found_tool.get_name() == "UnDefTool"
     await machine.tool_changer.find_tool("RefTool2")
     assert await machine.found_tool.get_name() == "RefTool2"
     assert await machine.found_tool.get_collection() == DEFAULT_TOOL_COLLECTION

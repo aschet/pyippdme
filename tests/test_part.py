@@ -46,5 +46,7 @@ async def test_set_then_get_round_trips(started_client: IppDmeClient, name: str)
 
 
 async def test_unrelated_property_still_uses_generic_store(started_client: IppDmeClient) -> None:
-    await started_client.call(CommandName.SET_PROP, NamedValue("SomeCustomThing", (Number.of(3),)))
-    assert await _get(started_client, "SomeCustomThing") == 3.0
+    await started_client.call(
+        CommandName.SET_PROP, NamedValue("XXSomeCustomThing", (Number.of(3),))
+    )
+    assert await _get(started_client, "XXSomeCustomThing") == 3.0

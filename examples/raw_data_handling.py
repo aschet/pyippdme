@@ -10,18 +10,17 @@ Starts an in-process VirtualCMM, triggers one raw-data acquisition
 (``DataAcquire``, 6.15.1), and retrieves it three different ways - the same
 acquisition, in each case:
 
-1. As a file (6.17.2.3): ``GetRawDataFile`` writes an XML point-cloud
-   document (Annex E) to disk and returns its ``file://`` URL; a client
-   parses it back into a typed ``PointCloudSet`` with
-   ``pyippdme.types.pointcloud.from_xml``.
-2. Via OS shared memory (6.17.2.2): ``GetRawDataShaMem`` publishes the raw
-   samples in a named ``multiprocessing.shared_memory.SharedMemory``
+1. As a file (6.17.2.3): ``GetRawDataFile`` writes the samples to a file as
+   an ESBF stream (Annex C.2) and returns its ``file://`` URL; a client
+   reads it back with ``pyippdme.rawdata.formats.unpack_esbf``.
+2. Via OS shared memory (6.17.2.2): ``GetRawDataShaMem`` publishes the same
+   ESBF stream in a named ``multiprocessing.shared_memory.SharedMemory``
    segment - genuinely readable by another process on the same machine,
    not just simulated.
 3. Via a binary TCP socket (6.17.2.1): ``RawDataBinSetup`` negotiates a
-   port and format, then ``GetRawDataBin`` streams the raw samples to
-   whoever connects to that port - here, a second connection made by this
-   same script, standing in for a real second process.
+   port and format, then ``GetRawDataBin`` streams the samples to whoever
+   connects to that port - here, a second connection made by this same
+   script, standing in for a real second process.
 
 Run directly: ``python examples/raw_data_handling.py``. No server needs to
 be running first - this script starts and stops its own.
@@ -31,17 +30,13 @@ from __future__ import annotations
 
 import asyncio
 import socket
-import struct
 from multiprocessing import shared_memory
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
-from pyippdme.server.virtual_cmm import VirtualCMM
-
-from pyippdme import IppDmeMachine
-from pyippdme.protocol.ast import BasicName, Number, String
-from pyippdme.types.pointcloud import from_xml as pointcloud_from_xml
+from pyippdme import IppDmeMachine, VirtualCMM
+from pyippdme.rawdata.formats import unpack_esbf
 
 
 def _free_port() -> int:
@@ -55,7 +50,7 @@ def _free_port() -> int:
 async def _receive_binary(host: str, port: int) -> bytes:
     await asyncio.sleep(0.05)  # give GetRawDataBin's listener a moment to start
     reader, writer = await asyncio.open_connection(host, port)
-    payload = await reader.read(4096)
+    payload = await reader.read()
     writer.close()
     return payload
 
@@ -77,11 +72,9 @@ async def main() -> None:
 
         # 1. File
         file_url = await machine.raw_data.get_raw_data_file("Acq1")
-        xml_text = Path(url2pathname(urlparse(file_url).path)).read_text()
-        point_cloud = pointcloud_from_xml(xml_text)
+        scan = unpack_esbf(Path(url2pathname(urlparse(file_url).path)).read_bytes())
         print(f"[File]         GetRawDataFile -> {file_url}")
-        print(f"               contents ({len(xml_text)} bytes of XML)")
-        print(f"               parsed via pyippdme.types.pointcloud.from_xml: {point_cloud}")
+        print(f"               read via pyippdme.rawdata.formats.unpack_esbf: {scan.points()}")
         await machine.raw_data.del_raw_data_file("Acq1")
 
         # 2. Shared memory
@@ -89,22 +82,20 @@ async def main() -> None:
         print(f"[SharedMemory] GetRawDataShaMem -> name={shmem_name!r} size={size}")
         segment = shared_memory.SharedMemory(name=shmem_name)
         assert segment.buf is not None  # noqa: S101 (just-opened segment always has a live buffer)
-        samples = struct.unpack(f"<{size // 8}d", bytes(segment.buf[:size]))
+        samples = unpack_esbf(bytes(segment.buf[:size])).points()
         print(f"               read back directly via multiprocessing.shared_memory: {samples}")
         segment.close()
         await machine.raw_data.release_sha_mem("Acq1")
 
         # 3. Binary socket
         bin_port = _free_port()
-        await machine.client.call(
-            "RawDataBinSetup", BasicName("double"), Number.of(bin_port), BasicName("Off")
+        await machine.raw_data.raw_data_bin_setup("double", bin_port)
+        _done, payload = await asyncio.gather(
+            machine.raw_data.get_raw_data_bin("Acq1"), _receive_binary(host, bin_port)
         )
-        _ack, payload = await asyncio.gather(
-            machine.client.call("GetRawDataBin", String("Acq1")),
-            _receive_binary(host, bin_port),
+        print(
+            f"[BinarySocket] GetRawDataBin over port {bin_port} -> {unpack_esbf(payload).points()}"
         )
-        received = struct.unpack(f"<{len(payload) // 8}d", payload)
-        print(f"[BinarySocket] GetRawDataBin over port {bin_port} -> {received}")
 
         await machine.end_session()
         await machine.close()

@@ -42,6 +42,11 @@ class Transaction:
         default_factory=asyncio.Queue, repr=False, compare=False
     )
 
+    @property
+    def received_data(self) -> bool:
+        """Whether any data response arrived before the transaction completed."""
+        return bool(self._data)
+
     def _on_ack(self) -> None:
         self._acked.set()
 

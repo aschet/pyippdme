@@ -5,7 +5,7 @@
 """A subset of the ``Tool`` command class (6.10).
 
 Implements the ``Tool``/``IsAlignable``/``Id``/``Name``/``Collection``/
-``LastQualified``/``ReQualify`` properties and commands (6.10.1-6.10.3)
+``LastQualified``/``ReQualify`` properties and commands (6.10.2-6.10.3)
 against :data:`TOOL_CATALOG`, the small, fixed set of simulated tools this
 library's ``CartCMM``/``TouchTrigger`` simulation and
 :mod:`pyippdme.simulation.classes.toolchanger_class` share, and registers a
@@ -43,12 +43,17 @@ travel time, or "would rotate more than 180 degrees" check behind it -
 and ``CalcToolAngles()`` derive two (or three) angles from that stored
 vector via one documented, simple convention (:func:`tool_angles`)
 rather than any real tool-head geometry - there being no genuine multi-DOF
-kinematic tool model to derive them from otherwise. ``AlignTool``'s inline
-``Alignment(...)`` argument form on ``GoTo``/``PtMeas``/``ScanOnCurve``
-(6.20.2's ``Alignment(i1,j1,k1,i2,j2,k2)`` "can only be invoked as an
-argument of" those three) is not wired into those handlers - only
-``AlignTool()`` itself, and ``Tool.Alignment()`` as a read-only property,
-actually change/report alignment state here.
+kinematic tool model to derive them from otherwise. The same orientation is
+moved by ``AlignTool()``, by the ``Tool.A``/``Tool.B``/``Tool.Alignment``
+arguments of ``GoTo``/``Step``/``PtMeas`` (6.8.1, 6.12.1; see
+:func:`apply_tool_orientation`) and reported by ``Tool.Alignment()`` (6.20.2). The
+catalog tool has the two rotation axes ``A`` and ``B``, so ``Tool.C`` is
+"Argument not supported".
+
+``NoTool`` is a catalog entry that stands for no tool being loaded: the
+machine can move with it but not measure (6.10.1, :func:`require_measuring_tool`).
+``AvrOffsets``, ``CollisionVolume`` and ``AlignmentVolume`` (6.20.2) are properties:
+they are read with ``GetProp(Tool.AvrOffsets())`` and so on, not called.
 """
 
 from __future__ import annotations
@@ -56,13 +61,13 @@ from __future__ import annotations
 import math
 from datetime import UTC, datetime
 
-from pyippdme.protocol.ast import Argument, Items, NamedValue, Number, String, Xml
+from pyippdme.protocol.ast import Argument, Items, NamedValue, Number, NumericData, String, Xml
 from pyippdme.protocol.commands import CommandName
 from pyippdme.protocol.errors import ErrorCode, ErrorSeverity, ServerError
 from pyippdme.protocol.signature import DataType, Parameter
 from pyippdme.server import builders
 from pyippdme.server._util import bad_argument
-from pyippdme.server.registry import CommandRegistry, HandlerResult, PropertyKind
+from pyippdme.server.registry import CommandHandler, CommandRegistry, HandlerResult, PropertyKind
 from pyippdme.server.tool import PARAMETER_FIELDS, ParameterField, ToolParameter, ToolParameters
 from pyippdme.simulation.context import Ctx
 from pyippdme.types.tool_id import (
@@ -75,13 +80,33 @@ from pyippdme.types.tool_id import (
 from pyippdme.types.tool_id import to_xml as tool_id_to_xml
 from pyippdme.types.vec3 import Vec3, dot, normalize
 
+#: What a catalog tool can do: move, measure single points and scan.
+_MEASURING_FUNCTIONS = tuple(
+    fn
+    for fn in BASIC_FUNCTIONS
+    if fn
+    in (
+        "GoTo",
+        "PtMeas",
+        "ScanOnLine",
+        "ScanOnCircle",
+        "ScanOnHelix",
+        "ScanOnCurve",
+        "PTMeasSelfCenter",
+        "PTMeasSelfCenterLocked",
+    )
+)
+
+#: The name of the pseudo tool that stands for "no tool loaded" (6.10.1).
+NO_TOOL = "NoTool"
+#: The pseudo tool ``FindTool`` yields when it found nothing (6.10.1, 6.22.1).
+UNDEF_TOOL = "UnDefTool"
+
 
 def _touch_trigger(tool_id: str) -> ToolIdTactileTouchTrigger:
     return ToolIdTactileTouchTrigger(
         id=tool_id,
-        basic_functions=tuple(
-            fn for fn in BASIC_FUNCTIONS if fn in (CommandName.GO_TO, CommandName.PT_MEAS)
-        ),
+        basic_functions=_MEASURING_FUNCTIONS,
         cnc_axes=("X", "Y", "Z"),
         supports_optimization_mode=False,
         align_mode=FixedAlignMode(),
@@ -102,15 +127,24 @@ TOOL_CATALOG: dict[str, tuple[ToolId, Vec3]] = {
     "AlignProbe": (
         ToolIdTactileTouchTrigger(
             id="AlignProbe",
-            basic_functions=tuple(
-                fn for fn in BASIC_FUNCTIONS if fn in (CommandName.GO_TO, CommandName.PT_MEAS)
-            ),
-            cnc_axes=("X", "Y", "Z"),
+            basic_functions=_MEASURING_FUNCTIONS,
+            cnc_axes=("X", "Y", "Z", "A", "B"),
             supports_optimization_mode=False,
             align_mode=ContinuousAlignMode(aligncaa=True),
             move_on_acquisition=False,
         ),
         (5.0, 0.0, 30.0),
+    ),
+    NO_TOOL: (
+        ToolIdTactileTouchTrigger(
+            id=NO_TOOL,
+            basic_functions=("GoTo",),
+            cnc_axes=("X", "Y", "Z"),
+            supports_optimization_mode=False,
+            align_mode=FixedAlignMode(),
+            move_on_acquisition=False,
+        ),
+        (0.0, 0.0, 0.0),
     ),
 }
 
@@ -211,6 +245,11 @@ def tool_alignment(ctx: Ctx, tool_name: str) -> tuple[Vec3, Vec3 | None]:
     return ctx.state.tool.alignment.get(tool_name, (_DEFAULT_ALIGNMENT, None))
 
 
+def is_alignable_tool(tool_name: str) -> bool:
+    """Whether the catalog tool ``tool_name`` can be aligned (``IsAlignable()``, 6.10.2)."""
+    return tool_name in _ALIGNABLE_TOOLS
+
+
 def _require_alignable(tool_name: str | None, cause: str) -> str:
     if tool_name is None or tool_name not in _ALIGNABLE_TOOLS:
         raise ServerError(
@@ -235,21 +274,113 @@ def tool_angles(primary: Vec3, secondary: Vec3 | None) -> tuple[float, float, fl
     return a, b, c
 
 
-def _try_get_named_tool_property(ctx: Ctx, arg: NamedValue) -> NamedValue | None:
-    """Resolve ``Tool.<X>``/``FoundTool.<X>``, X in Name/Collection/LastQualified/Id/Alignment."""
-    namespace, dot, leaf = arg.name.partition(".")
-    if (
-        not dot
-        or arg.args
-        or leaf
-        not in (
-            "Name",
-            "Collection",
-            "LastQualified",
-            "Id",
-            "Alignment",
+def alignment_from_angles(a: float, b: float) -> Vec3:
+    """Invert :func:`tool_angles` for a tool with the two rotation axes ``A`` and ``B``."""
+    ra, rb = math.radians(a), math.radians(b)
+    return (math.sin(ra) * math.cos(rb), math.sin(ra) * math.sin(rb), math.cos(ra))
+
+
+def tool_axis_value(ctx: Ctx, name: str, cause: str) -> float:
+    """Return the angle ``Tool.A``/``Tool.B``/``Tool.C`` (or the ``FoundTool`` one) names (6.20.2).
+
+    Raises ``1503`` when ``FoundTool`` has not been set by ``FindTool`` yet.
+    """
+    namespace, _dot, axis = name.partition(".")
+    tool_name = _named_tool_name(ctx, namespace)
+    if tool_name is None or tool_name not in TOOL_CATALOG:
+        raise ServerError(
+            ErrorSeverity.CRITICAL, ErrorCode.TOOL_NOT_DEFINED, cause, "Tool not defined"
         )
-    ):
+    primary, secondary = tool_alignment(ctx, tool_name)
+    a, b, c = tool_angles(primary, secondary)
+    return {"A": a, "B": b, "C": c}[axis]
+
+
+def tool_alignment_numbers(ctx: Ctx, namespace: str, cause: str) -> tuple[float, ...]:
+    """Return ``Tool.Alignment`` as three numbers, or six once a secondary vector is set."""
+    tool_name = _named_tool_name(ctx, namespace)
+    if tool_name is None or tool_name not in TOOL_CATALOG:
+        raise ServerError(
+            ErrorSeverity.CRITICAL, ErrorCode.TOOL_NOT_DEFINED, cause, "Tool not defined"
+        )
+    primary, secondary = tool_alignment(ctx, tool_name)
+    return (*primary, *(secondary or ()))
+
+
+def apply_tool_orientation(
+    ctx: Ctx,
+    cause: str,
+    *,
+    a: float | None = None,
+    b: float | None = None,
+    c: float | None = None,
+    alignment: tuple[float, ...] | None = None,
+    relative: bool = False,
+) -> None:
+    """Move the active tool's rotation axes: ``Tool.A``/``Tool.B``/``Tool.Alignment`` (6.8.1, 6.20).
+
+    ``relative`` adds the angles to the current ones (``Step``, 6.8.1). A tool
+    that cannot be aligned raises ``1505``; ``Tool.C`` needs a tool with a
+    third rotation axis (``Alignable_ABC``), which the catalog has none of.
+    """
+    if a is None and b is None and c is None and alignment is None:
+        return
+    tool_name = _require_alignable(ctx.state.tool.active_name, cause)
+    if c is not None:
+        raise ServerError(
+            ErrorSeverity.CRITICAL,
+            ErrorCode.ARGUMENT_NOT_SUPPORTED,
+            cause,
+            "Tool.C is not supported: the tool has only the rotation axes A and B",
+        )
+    primary, secondary = tool_alignment(ctx, tool_name)
+    new_secondary: Vec3 | None
+    if alignment is not None:
+        if len(alignment) not in (3, 6):
+            raise bad_argument(cause, "Tool.Alignment needs 3 or 6 numbers")
+        try:
+            new_primary = normalize((alignment[0], alignment[1], alignment[2]))
+            new_secondary = (
+                normalize((alignment[3], alignment[4], alignment[5]))
+                if len(alignment) == 6
+                else None
+            )
+        except ValueError as exc:
+            raise bad_argument(cause, "Tool.Alignment vectors must be non-zero") from exc
+    else:
+        current_a, current_b, _current_c = tool_angles(primary, secondary)
+        new_a = current_a if a is None else (current_a + a if relative else a)
+        new_b = current_b if b is None else (current_b + b if relative else b)
+        new_primary = alignment_from_angles(new_a, new_b)
+        new_secondary = None
+    ctx.state.tool.alignment[tool_name] = (new_primary, new_secondary)
+
+
+def require_measuring_tool(ctx: Ctx, cause: str) -> None:
+    """Raise ``1503`` while no tool is loaded; with ``NoTool`` the machine only moves (6.10.1)."""
+    if ctx.state.tool.active_name == NO_TOOL:
+        raise ServerError(
+            ErrorSeverity.CRITICAL, ErrorCode.TOOL_NOT_DEFINED, cause, "Tool not defined"
+        )
+
+
+#: ``Tool.<X>``/``FoundTool.<X>`` properties that ``GetProp`` answers (6.10.3, 6.20.2).
+_NAMED_TOOL_PROPERTIES = (
+    "Name",
+    "Collection",
+    "LastQualified",
+    "Id",
+    "Alignment",
+    "AvrOffsets",
+    "CollisionVolume",
+    "AlignmentVolume",
+)
+
+
+def _try_get_named_tool_property(ctx: Ctx, arg: NamedValue) -> NamedValue | None:
+    """Resolve ``Tool.<X>``/``FoundTool.<X>`` for :data:`_NAMED_TOOL_PROPERTIES`."""
+    namespace, dot, leaf = arg.name.partition(".")
+    if not dot or arg.args or leaf not in _NAMED_TOOL_PROPERTIES:
         return None
     maybe_tool_name = _named_tool_name(ctx, namespace)
     if leaf == "Name":
@@ -257,7 +388,7 @@ def _try_get_named_tool_property(ctx: Ctx, arg: NamedValue) -> NamedValue | None
         # this always resolves, unlike the other four below, which need a
         # real catalog entry to answer from.
         return NamedValue(
-            arg.name, (String(maybe_tool_name if maybe_tool_name is not None else "NoTool"),)
+            arg.name, (String(maybe_tool_name if maybe_tool_name is not None else UNDEF_TOOL),)
         )
     if maybe_tool_name is None or maybe_tool_name not in TOOL_CATALOG:
         if leaf == "Id":
@@ -280,6 +411,13 @@ def _try_get_named_tool_property(ctx: Ctx, arg: NamedValue) -> NamedValue | None
         primary, secondary = tool_alignment(ctx, tool_name)
         numbers = (*primary, *(secondary or ()))
         return NamedValue(arg.name, tuple(Number.of(c) for c in numbers))
+    if leaf == "AvrOffsets":
+        # "Relative to an arbitrary reference point which changes from server to server"
+        # (Table 116): this simulation has no offset model, so zero.
+        return NamedValue(arg.name, tuple(Number.of(0.0) for _ in range(3)))
+    if leaf in ("CollisionVolume", "AlignmentVolume"):
+        # No collision geometry is modeled: no boxes/spheres is the honest answer.
+        return NamedValue(arg.name, ())
     # Only "Id" remains at this point.
     tool_id, _offset = TOOL_CATALOG[tool_name]
     return NamedValue(arg.name, (), Xml(tool_id_to_xml(tool_id)))
@@ -316,23 +454,29 @@ def _tool_property_children(ctx: Ctx, reference: str) -> tuple[tuple[str, str], 
             ("Name", PropertyKind.STRING),
             ("Collection", PropertyKind.STRING),
             ("LastQualified", PropertyKind.STRING),
+            ("AvrOffsets", PropertyKind.NUMBER),
+            ("CollisionVolume", PropertyKind.NUMBER),
+            ("AlignmentVolume", PropertyKind.NUMBER),
         )
         if reference == CommandName.TOOL:
             fixed += (
                 ("GoToPar", PropertyKind.PROPERTY),
                 ("PtMeasPar", PropertyKind.PROPERTY),
                 ("ScanPar", PropertyKind.PROPERTY),
+                ("AlignMode", PropertyKind.PROPERTY),
             )
         tool_name = _named_tool_name(ctx, reference)
         if tool_name in _ALIGNABLE_TOOLS:
             fixed += (
-                ("Alignment", PropertyKind.PROPERTY),
+                ("Alignment", PropertyKind.NUMBER),
                 ("A", PropertyKind.NUMBER),
                 ("B", PropertyKind.NUMBER),
                 ("C", PropertyKind.NUMBER),
             )
         return fixed
     parts = reference.split(".")
+    if parts == [CommandName.TOOL, "AlignMode"]:
+        return ()  # 6.18.2, 6.19.2: the alignment classes have no properties
     if len(parts) == 2 and parts[0] == CommandName.TOOL:
         block = ctx.state.tool.parameters.block(parts[1])
         if block is None:
@@ -347,15 +491,17 @@ def _tool_property_children(ctx: Ctx, reference: str) -> tuple[tuple[str, str], 
 
 
 async def _tool(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
-    return builders.name_value(ctx.state.tool.active_name)
+    return builders.name_value(ctx.state.tool.active_name)  # Table 64: the pointer to the tool
 
 
 async def _is_alignable(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
-    return builders.boolean(ctx.state.tool.active_name in _ALIGNABLE_TOOLS)
+    return builders.named_boolean(
+        CommandName.IS_ALIGNABLE, ctx.state.tool.active_name in _ALIGNABLE_TOOLS
+    )
 
 
 async def _re_qualify(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
-    # 6.10.1's own "General Remarks": "does not explicitly respond a
+    # 6.10.2's own "General Remarks" under ReQualify(): "does not explicitly respond a
     # successful requalification... if the method terminates without
     # sending an error, the tool is requalified successfully" - there is no
     # real calibration artefact here to measure against, so this always
@@ -411,26 +557,17 @@ async def _align_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     except ValueError as exc:
         raise bad_argument(CommandName.ALIGN_TOOL, "i1,j1,k1/i2,j2,k2 must be non-zero") from exc
     ctx.state.tool.alignment[ctx.state.tool.active_name] = (primary, secondary)
-    return Items(
-        tuple(
-            NamedValue(n, (Number.of(c),)) for n, c in zip(("i1", "j1", "k1"), primary, strict=True)
-        )
-        + (
-            ()
-            if secondary is None
-            else tuple(
-                NamedValue(n, (Number.of(c),))
-                for n, c in zip(("i2", "j2", "k2"), secondary, strict=True)
-            )
-        )
-    )
+    # AlignTool() moves the machine, so (6.7.1) it implicitly executes DisableUser().
+    ctx.state.mover.user_enabled = False
+    # Table 105: the reached vectors are returned unnamed ("Kind U").
+    return NumericData(tuple(Number.of(c) for c in (*primary, *(secondary or ()))))
 
 
 async def _avr_radius(_ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
     # 6.20.1's own remark: zero "in all other cases" than a sphere/cylinder
     # tip qualified with an effective-tool-radius algorithm - this
     # simulation has no such qualification, so always zero.
-    return builders.number(0.0)
+    return builders.named_numbers(AvrRadius=0.0)
 
 
 def _resolve_alignment_namespace(arg_name: str, cause: str) -> str:
@@ -514,23 +651,27 @@ async def _disable_optimize(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerRes
 
 
 async def _is_optimize_enabled(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
-    return builders.boolean(ctx.state.tool.optimize_enabled)
+    # Table 112 names the value "IsOptimizedEnabled" (Kind N: named after the variable).
+    return builders.named_boolean("IsOptimizedEnabled", ctx.state.tool.optimize_enabled)
 
 
-async def _avr_offsets(_ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
-    # "Relative to an arbitrary reference point which changes from server
-    # to server" (6.20.2) - this simulation has no offset model, so zero.
-    return builders.named_numbers(x=0.0, y=0.0, z=0.0)
+def _pointer(name: str) -> CommandHandler:
+    """Build the handler of a pointer command such as ``PtMeasPar()`` (Table 77)."""
+
+    async def pointer(_ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
+        return builders.name_value(f"{CommandName.TOOL}.{name}")
+
+    return pointer
 
 
-async def _collision_volume(_ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
-    # No collision geometry is modeled - reporting zero boxes is the honest
-    # "not modeled" answer, not a fabricated volume (see module docstring).
-    return ()
-
-
-async def _alignment_volume(_ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
-    return ()  # Same reasoning as _collision_volume.
+async def _opt_par(_ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
+    # OptPar "only exists for tools of class Optical" (6.10.4); the catalog has none.
+    raise ServerError(
+        ErrorSeverity.WARNING,
+        ErrorCode.TOOL_PROPERTY_NOT_APPLICABLE,
+        CommandName.OPT_PAR,
+        "Tool property not applicable",
+    )
 
 
 _CALC_TOOL_ALIGNMENT_PARAMS = (Parameter("Axes", DataType.ENUM),)
@@ -572,9 +713,10 @@ def register(registry: CommandRegistry) -> None:
     registry.register(CommandName.ENABLE_OPTIMIZE, _enable_optimize, arguments=())
     registry.register(CommandName.DISABLE_OPTIMIZE, _disable_optimize, arguments=())
     registry.register(CommandName.IS_OPTIMIZE_ENABLED, _is_optimize_enabled, arguments=())
-    registry.register(CommandName.AVR_OFFSETS, _avr_offsets, arguments=())
-    registry.register(CommandName.COLLISION_VOLUME, _collision_volume, arguments=())
-    registry.register(CommandName.ALIGNMENT_VOLUME, _alignment_volume, arguments=())
+    registry.register(CommandName.GO_TO_PAR, _pointer("GoToPar"), arguments=())
+    registry.register(CommandName.PT_MEAS_PAR, _pointer("PtMeasPar"), arguments=())
+    registry.register(CommandName.SCAN_PAR, _pointer("ScanPar"), arguments=())
+    registry.register(CommandName.OPT_PAR, _opt_par, arguments=())
     registry.register_property_resolver(setter=_try_set_tool_param, getter=_try_get_tool_param)
     registry.register_property_children(_tool_property_children)
     registry.register_session_start_hook(_reset_on_start_session)

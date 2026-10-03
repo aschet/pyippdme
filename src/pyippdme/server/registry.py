@@ -124,11 +124,20 @@ class MachineState:
     session_active: bool = False
     active_error: ServerError | None = None
     homed: bool = False
-    machine_class: str = DEFAULT_MACHINE_CLASS
+    machine_class: str | tuple[str, ...] = DEFAULT_MACHINE_CLASS
     dme_version: str = "2.5"
     #: Generic fallback store for SetProp/GetProp on properties not modeled
     #: individually by a built-in class, keyed by dotted property name.
     properties: dict[str, tuple[Argument, ...]] = field(default_factory=dict)
+
+    def carry_over_from(self, previous: MachineState) -> None:
+        """Take over what the server keeps between clients (6.3.1: ``EndSession``/``StartSession``).
+
+        The machine keeps being homed. A subclass adds the state of the
+        command classes it owns: the active tool, the active coordinate
+        system and the part.
+        """
+        self.homed = previous.homed
 
 
 StateT = TypeVar("StateT", bound=MachineState)

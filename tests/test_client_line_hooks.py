@@ -39,7 +39,7 @@ async def test_on_line_received_reports_every_response_without_the_terminator(
         "00001 &",
         "00001 %",
         "00002 &",
-        '00002 # DMEVersion("2.5")',
+        '00002 # GetDMEVersion("2.5")',
         "00002 %",
     ]
     assert not any(line.endswith("\r") or line.endswith("\n") for line in received)

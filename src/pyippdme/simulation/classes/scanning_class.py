@@ -18,13 +18,13 @@ rather than the :class:`~pyippdme.protocol.ast.Items` used by ``Get``/
 ``PtMeas``. ``OnScanReport(...)`` only accepts field names this
 simulation can genuinely report (see :data:`_SCAN_REPORT_NAMES`) -
 requesting anything else is rejected up front, rather than silently
-reporting 0 for a field that looks like real measured data. ``IJK``/
-``IJKAct`` report the scan's own orientation argument - a constant
+reporting 0 for a field that looks like real measured data. ``IJK``
+reports the scan's own orientation argument - a constant
 scanning-plane/cylinder-axis normal for ``ScanOnCircle``/``ScanOnLine``/
 ``ScanOnHelix``/the unknown-contour scans below, or (genuinely per-point,
 since the client supplies it directly) each point's own ``IJK`` for
 ``ScanOnCurve`` - not a measured contact-surface normal, which no backend
-here produces.
+here produces; ``IJKAct`` is the single number 2 that says so (Table 32).
 
 Argument validation (degenerate geometry, orthogonality, StepW) happens
 here, synchronously, before any points are produced. The points themselves
@@ -80,7 +80,7 @@ adaptive tracing this simplification does not attempt. The two
 scanning-cylinder commands have no scanning-plane normal argument to
 validate/report an orientation from, unlike the three scanning-plane
 ones - the cylinder axis direction (``Ci,Cj,Ck``) is reused for
-``IJK``/``IJKAct`` instead, the closest available orientation reference.
+``IJK`` instead, the closest available orientation reference.
 
 ``ScanOnCurveHint``/``ScanOnCurveDensity`` (6.13.2, both hints) are
 accepted and ignored like the other ``*Hint`` commands. ``ScanUnknownDensity``
@@ -99,19 +99,19 @@ a real captured wire example (the NIST/I++ DME reference test suite's
 Format(X(),Y(),Z(),IJK(),tag), Data(0.,0.,0., 0.,0.,1., 555, 100.,0.,0.,
 0.,0.,1., 666, ...))``, since that reference project pre-dates this one and
 is not treated as a source of truth for anything beyond wire syntax like
-this). This implementation supports exactly that ``Format`` - position
-(``X()``, ``Y()``, ``Z()``), orientation (``IJK()``), and contact ``tag``,
-the three items Table 85 marks mandatory (seven numbers per point) -
-and rejects a ``Format`` that also requests the optional tool-alignment
-(``pi,pj,pk``/``si,sj,sk``) or rotary-table (``R()``) columns, which would
-change the per-point field count; like ``ScanOnLine``/``ScanOnCircle``,
-each nominal point is echoed back as the "measured" one (no real part
-geometry), and ``Closed``/``RT`` are accepted but do not change the stream.
+this). This implementation supports that ``Format`` plus the optional columns
+Table 85 lists after ``tag``: the nominal tool directions ``pi,pj,pk`` and
+``si,sj,sk`` (see ``AlignTool``) and the rotary-table angle ``R()``; the
+directions are accepted and not acted on, and ``R`` moves the rotary table
+when ``RT`` is 1. Like ``ScanOnLine``/``ScanOnCircle``, each nominal point is
+echoed back as the "measured" one (no real part geometry), and ``Closed``
+does not change the stream.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 from pyippdme.protocol.ast import Argument, BasicName, NamedValue, Number, NumericData
 from pyippdme.protocol.commands import CommandName
@@ -131,6 +131,11 @@ from pyippdme.server._util import (
 )
 from pyippdme.server.backend import MachineBackend
 from pyippdme.server.registry import CommandRegistry, HandlerResult
+from pyippdme.simulation.classes.tool_class import (
+    require_measuring_tool,
+    tool_alignment_numbers,
+    tool_axis_value,
+)
 from pyippdme.simulation.context import Ctx
 from pyippdme.types.vec3 import Vec3, add, cross, dot, norm, normalize, scale, sub
 
@@ -144,6 +149,7 @@ def _require_backend(ctx: Ctx, cause: str) -> MachineBackend:
     backend is. A server registering this class without one is
     misconfigured; report that plainly rather than an opaque ``AttributeError``.
     """
+    require_measuring_tool(ctx, cause)
     if ctx.backend is None:
         raise ServerError(
             ErrorSeverity.CRITICAL,
@@ -370,30 +376,50 @@ _SCAN_IN_CYL_END_IS_PLANE_PARAMS = positional_float_parameters(
 _AXIS_REPORT_NAMES = (ParameterName.X, ParameterName.Y, ParameterName.Z)
 #: ``ER`` (6.10.2 Table 66, "effective tool radius during a measurement")
 #: joins ``Q`` as another always-``0.0`` field: no real geometry means no
-#: real effective radius either. ``IJK``/``IJKAct`` both report the same
-#: scan orientation - the command's own ``i,j,k``/per-point ``Si,Sj,Sk``
-#: argument, whichever this scan kind was actually given (see each
-#: handler's own call to :func:`_report_values`) - since there is no
-#: separate "requested vs. actually used" distinction to report
-#: differently. ``R`` (also valid per ``OnScanReport``'s own Table 78)
-#: isn't modeled - see TODO.md.
+#: real effective radius either. ``IJK`` is the scan orientation - the
+#: command's own ``i,j,k``/per-point ``Si,Sj,Sk`` argument, whichever this
+#: scan kind was actually given (see each handler's own call to
+#: :func:`_report_values`) - and ``IJKAct`` says it is the nominal vector
+#: (Table 32). ``R`` is the rotary table position, and ``Tool.Alignment``
+#: and the tool angles report what ``AlignTool()`` set.
 _SCAN_REPORT_NAMES = (
     *_AXIS_REPORT_NAMES,
+    ParameterName.R,
     ParameterName.Q,
     ParameterName.ER,
     ParameterName.IJK,
     ParameterName.IJK_ACT,
+    "Tool.A",
+    "Tool.B",
+    "Tool.C",
+    "FoundTool.A",
+    "FoundTool.B",
+    "FoundTool.C",
+    "Tool.Alignment",
+    "FoundTool.Alignment",
 )
+#: ``IJKAct`` value (Table 32) for "IJK is the nominal vector".
+_IJK_ACT_NOMINAL = 2.0
 
 
-def _report_values(names: tuple[str, ...], point: Vec3, ijk: Vec3) -> tuple[Number, ...]:
+def _report_values(ctx: Ctx, point: Vec3, ijk: Vec3, cause: str) -> tuple[Number, ...]:
+    """Build one scanned point's bare values, in the order ``OnScanReport`` asked for."""
     axis: dict[str, int] = {ParameterName.X: 0, ParameterName.Y: 1, ParameterName.Z: 2}
     values: list[Number] = []
-    for n in names:
+    for n in ctx.state.scanning.report or _DEFAULT_SCAN_REPORT:
         if n in axis:
             values.append(Number.of(point[axis[n]]))
-        elif n in (ParameterName.IJK, ParameterName.IJK_ACT):
+        elif n == ParameterName.IJK:
             values.extend(Number.of(c) for c in ijk)
+        elif n == ParameterName.IJK_ACT:
+            values.append(Number.of(_IJK_ACT_NOMINAL))
+        elif n == ParameterName.R:
+            values.append(Number.of(ctx.state.rotary_table.position))
+        elif n.endswith(".Alignment"):
+            numbers = tool_alignment_numbers(ctx, n.partition(".")[0], cause)
+            values.extend(Number.of(c) for c in numbers)
+        elif n.startswith(("Tool.", "FoundTool.")):
+            values.append(Number.of(tool_axis_value(ctx, n, cause)))
         else:
             values.append(Number.of(0.0))  # Q/ER: see _SCAN_REPORT_NAMES
     return tuple(values)
@@ -412,9 +438,9 @@ async def _on_scan_report(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult
         if arg.name not in _SCAN_REPORT_NAMES:
             raise ServerError(
                 ErrorSeverity.CRITICAL,
-                ErrorCode.ARGUMENT_NOT_SUPPORTED,
+                ErrorCode.BAD_PROPERTY,
                 CommandName.ON_SCAN_REPORT,
-                f"Argument {arg.name} not supported",
+                f"{arg.name} is not allowed in a report",
             )
         names.append(arg.name)
     if not names:
@@ -470,37 +496,79 @@ async def _scan_on_curve_density(_ctx: Ctx, args: tuple[Argument, ...]) -> Handl
     return None
 
 
-def _validate_scan_on_curve_format(args: tuple[Argument, ...]) -> None:
-    if len(args) != len(_SCAN_ON_CURVE_FORMAT_NAMES):
+@dataclass(frozen=True, slots=True)
+class _CurveFormat:
+    """Which optional columns a ``ScanOnCurve`` ``Format`` asks for (Table 85)."""
+
+    primary: bool = False
+    secondary: bool = False
+    rotary: bool = False
+
+    @property
+    def point_size(self) -> int:
+        return _SCAN_ON_CURVE_POINT_SIZE + 3 * self.primary + 3 * self.secondary + self.rotary
+
+
+@dataclass(frozen=True, slots=True)
+class _CurvePoint:
+    position: Vec3
+    ijk: Vec3
+    rotary: float | None
+
+
+def _validate_scan_on_curve_format(args: tuple[Argument, ...]) -> _CurveFormat:
+    """Check ``Format(X(),Y(),Z(),IJK(),tag[,pi,pj,pk[,si,sj,sk]][,R()])`` (Table 85)."""
+    mandatory = _SCAN_ON_CURVE_FORMAT_NAMES
+    if len(args) < len(mandatory):
         raise bad_argument(
-            CommandName.SCAN_ON_CURVE,
-            "Format must be exactly X(),Y(),Z(),IJK(),tag - the optional pi/pj/pk, "
-            "si/sj/sk, and R() columns are not supported",
+            CommandName.SCAN_ON_CURVE, "Format must start with X(),Y(),Z(),IJK(),tag"
         )
-    for arg, expected in zip(args, _SCAN_ON_CURVE_FORMAT_NAMES[:-1], strict=False):
+    for arg, expected in zip(args, mandatory[:-1], strict=False):
         if not isinstance(arg, NamedValue) or arg.args or arg.name != expected:
             raise bad_argument(CommandName.SCAN_ON_CURVE, f"Expected {expected}() in Format")
-    tag_item = args[-1]
+    tag_item = args[len(mandatory) - 1]
     if not isinstance(tag_item, BasicName) or tag_item.value.lower() != ParameterName.TAG:
-        raise bad_argument(CommandName.SCAN_ON_CURVE, "Expected tag as the last Format item")
-
-
-def _scan_on_curve_points(data_args: tuple[Argument, ...]) -> list[tuple[Vec3, Vec3]]:
-    """Parse ``Data``'s flat number list into ``(position, ijk)`` pairs, one per point."""
-    if not data_args or len(data_args) % _SCAN_ON_CURVE_POINT_SIZE != 0:
+        raise bad_argument(CommandName.SCAN_ON_CURVE, "Expected tag after IJK() in Format")
+    rest = [
+        item.value if isinstance(item, BasicName) else f"{item.name}()"
+        for item in args[len(mandatory) :]
+        if isinstance(item, BasicName | NamedValue)
+    ]
+    if len(rest) != len(args) - len(mandatory):
+        raise bad_argument(CommandName.SCAN_ON_CURVE, "Unexpected item in Format")
+    primary = rest[:3] == ["pi", "pj", "pk"]
+    rest = rest[3:] if primary else rest
+    secondary = primary and rest[:3] == ["si", "sj", "sk"]
+    rest = rest[3:] if secondary else rest
+    rotary = rest == ["R()"]
+    if rest and not rotary:
         raise bad_argument(
             CommandName.SCAN_ON_CURVE,
-            f"Data must hold a multiple of {_SCAN_ON_CURVE_POINT_SIZE} numbers per point",
+            "Format items after tag must be pi,pj,pk then si,sj,sk then R()",
+        )
+    return _CurveFormat(primary, secondary, rotary)
+
+
+def _scan_on_curve_points(
+    data_args: tuple[Argument, ...], curve_format: _CurveFormat
+) -> list[_CurvePoint]:
+    """Parse ``Data``'s flat number list into one :class:`_CurvePoint` per nominal point."""
+    size = curve_format.point_size
+    if not data_args or len(data_args) % size != 0:
+        raise bad_argument(
+            CommandName.SCAN_ON_CURVE,
+            f"Data must hold a multiple of {size} numbers per point",
         )
     if not all(isinstance(a, Number) for a in data_args):
         raise bad_argument(CommandName.SCAN_ON_CURVE, "Data must be a flat list of numbers")
     numbers = tuple(a.value for a in data_args if isinstance(a, Number))
     return [
-        (
+        _CurvePoint(
             (numbers[i], numbers[i + 1], numbers[i + 2]),
             (numbers[i + 3], numbers[i + 4], numbers[i + 5]),
+            numbers[i + size - 1] if curve_format.rotary else None,
         )
-        for i in range(0, len(numbers), _SCAN_ON_CURVE_POINT_SIZE)
+        for i in range(0, len(numbers), size)
     ]
 
 
@@ -527,21 +595,31 @@ async def _scan_on_curve(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     closed_args = by_name["Closed"].args
     if len(closed_args) != 1 or not isinstance(closed_args[0], Number):
         raise bad_argument(CommandName.SCAN_ON_CURVE, "Expected Closed(<bool>)")
-    _validate_scan_on_curve_format(by_name["Format"].args)
-    points = _scan_on_curve_points(by_name["Data"].args)
+    require_measuring_tool(ctx, CommandName.SCAN_ON_CURVE)
+    curve_format = _validate_scan_on_curve_format(by_name["Format"].args)
+    points = _scan_on_curve_points(by_name["Data"].args, curve_format)
+    rotary_table = False
+    if "RT" in by_name:
+        rt_args = by_name["RT"].args
+        if len(rt_args) != 1 or not isinstance(rt_args[0], Number):
+            raise bad_argument(CommandName.SCAN_ON_CURVE, "Expected RT(<bool>)")
+        rotary_table = rt_args[0].value != 0
     # RT (rotary-table motion during scanning) is accepted but ignored, like
     # every other ScanOn... command's RT (see module docstring); Closed does
     # not change the emitted stream (no real path planning is simulated).
 
     ctx.state.mover.user_enabled = False
-    report = ctx.state.scanning.report or _DEFAULT_SCAN_REPORT
 
     async def _stream() -> AsyncIterator[NumericData]:
-        for point, ijk in points:
+        for nominal in points:
             if ctx.cancel.is_set():
                 return
-            ctx.state.cart_cmm.position = point
-            yield NumericData(_report_values(report, point, ijk))
+            ctx.state.cart_cmm.position = nominal.position
+            if rotary_table and nominal.rotary is not None:
+                ctx.state.rotary_table.position = nominal.rotary
+            yield NumericData(
+                _report_values(ctx, nominal.position, nominal.ijk, CommandName.SCAN_ON_CURVE)
+            )
 
     return _stream()
 
@@ -568,12 +646,11 @@ async def _scan_on_circle(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult
 
     # Mover 6.7.1: all ScanOn... commands implicitly execute DisableUser().
     ctx.state.mover.user_enabled = False
-    report = ctx.state.scanning.report or _DEFAULT_SCAN_REPORT
 
     async def _stream() -> AsyncIterator[NumericData]:
         async for point in backend.scan_circle(center, start, normal, delta, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
-            yield NumericData(_report_values(report, point, unit_normal))
+            yield NumericData(_report_values(ctx, point, unit_normal, CommandName.SCAN_ON_CIRCLE))
 
     return _stream()
 
@@ -602,14 +679,13 @@ async def _scan_on_helix(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
 
     # Mover 6.7.1: all ScanOn... commands implicitly execute DisableUser().
     ctx.state.mover.user_enabled = False
-    report = ctx.state.scanning.report or _DEFAULT_SCAN_REPORT
 
     async def _stream() -> AsyncIterator[NumericData]:
         async for point in backend.scan_helix(
             center, start, normal, delta, step_w, pitch, ctx.cancel
         ):
             ctx.state.cart_cmm.position = point
-            yield NumericData(_report_values(report, point, unit_normal))
+            yield NumericData(_report_values(ctx, point, unit_normal, CommandName.SCAN_ON_HELIX))
 
     return _stream()
 
@@ -636,12 +712,11 @@ async def _scan_on_line(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
 
     # Mover 6.7.1: all ScanOn... commands implicitly execute DisableUser().
     ctx.state.mover.user_enabled = False
-    report = ctx.state.scanning.report or _DEFAULT_SCAN_REPORT
 
     async def _stream() -> AsyncIterator[NumericData]:
         async for point in backend.scan_line(start, end, normal, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
-            yield NumericData(_report_values(report, point, unit_normal))
+            yield NumericData(_report_values(ctx, point, unit_normal, CommandName.SCAN_ON_LINE))
 
     return _stream()
 
@@ -730,13 +805,14 @@ async def _scan_in_plane_end_is_sphere(ctx: Ctx, args: tuple[Argument, ...]) -> 
     backend = _require_backend(ctx, CommandName.SCAN_IN_PLANE_END_IS_SPHERE)
 
     ctx.state.mover.user_enabled = False
-    report = ctx.state.scanning.report or _DEFAULT_SCAN_REPORT
 
     async def _stream() -> AsyncIterator[NumericData]:
         sphere_entries = 0
         async for point in backend.scan_line(start, end, normal, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
-            yield NumericData(_report_values(report, point, unit_normal))
+            yield NumericData(
+                _report_values(ctx, point, unit_normal, CommandName.SCAN_IN_PLANE_END_IS_SPHERE)
+            )
             if norm(sub(point, end)) <= dia:
                 sphere_entries += 1
                 if sphere_entries >= n:
@@ -825,13 +901,14 @@ async def _scan_in_plane_end_is_plane(ctx: Ctx, args: tuple[Argument, ...]) -> H
     backend = _require_backend(ctx, CommandName.SCAN_IN_PLANE_END_IS_PLANE)
 
     ctx.state.mover.user_enabled = False
-    report = ctx.state.scanning.report or _DEFAULT_SCAN_REPORT
 
     async def _stream() -> AsyncIterator[NumericData]:
         crossings = 0
         async for point in backend.scan_line(start, end, normal, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
-            yield NumericData(_report_values(report, point, unit_normal))
+            yield NumericData(
+                _report_values(ctx, point, unit_normal, CommandName.SCAN_IN_PLANE_END_IS_PLANE)
+            )
             side = _plane_side(point, plane_point, plane_normal_unit)
             if side * start_side <= 0:
                 crossings += 1
@@ -903,13 +980,14 @@ async def _scan_in_plane_end_is_cyl(ctx: Ctx, args: tuple[Argument, ...]) -> Han
     backend = _require_backend(ctx, CommandName.SCAN_IN_PLANE_END_IS_CYL)
 
     ctx.state.mover.user_enabled = False
-    report = ctx.state.scanning.report or _DEFAULT_SCAN_REPORT
 
     async def _stream() -> AsyncIterator[NumericData]:
         entries = 0
         async for point in backend.scan_line(start, end, normal, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
-            yield NumericData(_report_values(report, point, unit_normal))
+            yield NumericData(
+                _report_values(ctx, point, unit_normal, CommandName.SCAN_IN_PLANE_END_IS_CYL)
+            )
             if _radial_distance(point, axis_point, axis_unit) <= d:
                 entries += 1
                 if entries >= n:
@@ -977,16 +1055,17 @@ async def _scan_in_cyl_end_is_sphere(ctx: Ctx, args: tuple[Argument, ...]) -> Ha
     backend = _require_backend(ctx, CommandName.SCAN_IN_CYL_END_IS_SPHERE)
 
     ctx.state.mover.user_enabled = False
-    report = ctx.state.scanning.report or _DEFAULT_SCAN_REPORT
 
     async def _stream() -> AsyncIterator[NumericData]:
         sphere_entries = 0
         # No scanning-plane normal exists for this surface kind (see module
         # docstring) - the cylinder axis is the closest available
-        # orientation reference, reused for IJK/IJKAct too.
+        # orientation reference, reused for IJK too.
         async for point in backend.scan_line(start, end, axis_unit, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
-            yield NumericData(_report_values(report, point, axis_unit))
+            yield NumericData(
+                _report_values(ctx, point, axis_unit, CommandName.SCAN_IN_CYL_END_IS_SPHERE)
+            )
             if norm(sub(point, end)) <= dia:
                 sphere_entries += 1
                 if sphere_entries >= n:
@@ -1059,13 +1138,14 @@ async def _scan_in_cyl_end_is_plane(ctx: Ctx, args: tuple[Argument, ...]) -> Han
     backend = _require_backend(ctx, CommandName.SCAN_IN_CYL_END_IS_PLANE)
 
     ctx.state.mover.user_enabled = False
-    report = ctx.state.scanning.report or _DEFAULT_SCAN_REPORT
 
     async def _stream() -> AsyncIterator[NumericData]:
         crossings = 0
         async for point in backend.scan_line(start, end, axis_unit, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
-            yield NumericData(_report_values(report, point, axis_unit))
+            yield NumericData(
+                _report_values(ctx, point, axis_unit, CommandName.SCAN_IN_CYL_END_IS_PLANE)
+            )
             side = _plane_side(point, plane_point, plane_normal_unit)
             if side * start_side <= 0:
                 crossings += 1
@@ -1075,7 +1155,13 @@ async def _scan_in_cyl_end_is_plane(ctx: Ctx, args: tuple[Argument, ...]) -> Han
     return _stream()
 
 
+def _reset_report_on_start_session(ctx: Ctx) -> None:
+    # 6.3.1 StartSession(): "those of OnScanReport are set to (X(),Y(),Z(),Q())".
+    ctx.state.scanning.report = ()
+
+
 def register(registry: CommandRegistry) -> None:
+    registry.register_session_start_hook(_reset_report_on_start_session)
     registry.register(CommandName.ON_SCAN_REPORT, _on_scan_report, arguments=_ON_SCAN_REPORT_PARAMS)
     registry.register(
         CommandName.SCAN_ON_CIRCLE_HINT, _scan_on_circle_hint, arguments=_SCAN_ON_CIRCLE_HINT_PARAMS

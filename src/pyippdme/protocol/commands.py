@@ -87,6 +87,11 @@ class CommandName(StrEnum):
     TOOL = "Tool"
     IS_ALIGNABLE = "IsAlignable"
     RE_QUALIFY = "ReQualify"
+    # Pointers to a Tool's parameter blocks (6.10.4); they exist as commands too (Table 77).
+    GO_TO_PAR = "GoToPar"
+    PT_MEAS_PAR = "PtMeasPar"
+    SCAN_PAR = "ScanPar"
+    OPT_PAR = "OptPar"
 
     # Alignable_AB/Alignable_ABC (6.20/6.21) - tool orientation.
     ALIGN_TOOL = "AlignTool"
@@ -97,9 +102,6 @@ class CommandName(StrEnum):
     ENABLE_OPTIMIZE = "EnableOptimize"
     DISABLE_OPTIMIZE = "DisableOptimize"
     IS_OPTIMIZE_ENABLED = "IsOptimizeEnabled"
-    AVR_OFFSETS = "AvrOffsets"
-    COLLISION_VOLUME = "CollisionVolume"
-    ALIGNMENT_VOLUME = "AlignmentVolume"
 
     # ToolChanger (6.22) - installing/changing tools.
     ENUM_TOOLS = "EnumTools"
@@ -146,6 +148,7 @@ class CommandName(StrEnum):
     SET_SCALE_TEMPERATURES = "SetScaleTemperatures"
     GET_SCALE_TEMPERATURES = "GetScaleTemperatures"
     SET_TEMPERATURE_COMPENSATION_ORIGIN = "SetTemperatureCompensationOrigin"
+    # OnMoveReport() and OnMoveReportE() are defined with the Tool commands (6.10.2).
     ON_MOVE_REPORT = "OnMoveReport"
     ON_MOVE_REPORT_E = "OnMoveReportE"
 
@@ -180,3 +183,37 @@ class CommandName(StrEnum):
     # Part (6.24) has no commands of its own, only properties (Temperature,
     # XpanCoefficient, Approach, Search, Retract - reached through SetProp/
     # GetProp above, see pyippdme.simulation.classes.part_class), so it adds no members.
+
+
+#: Properties and report fields the standard defines (6.3.1.1, 6.5.2, 6.10, 6.20-6.24). They are
+#: only valid as an argument of another command; sent as a command of their own, the server answers
+#: error 0508 "Bad context", not 0501 "Unsupported command".
+PROPERTY_NAMES = frozenset(
+    {
+        "X",
+        "Y",
+        "Z",
+        "R",
+        "A",
+        "B",
+        "C",
+        "IJK",
+        "IJKAct",
+        "ER",
+        "Q",
+        "Name",
+        "Id",
+        "Collection",
+        "LastQualified",
+        "AlignMode",
+        "Alignment",
+        "AvrOffsets",
+        "CollisionVolume",
+        "AlignmentVolume",
+        "Temperature",
+        "XpanCoefficient",
+        "Approach",
+        "Search",
+        "Retract",
+    }
+)

@@ -76,7 +76,7 @@ async def test_on_pt_meas_report_accepts_ijk_and_ijk_act(started_client: IppDmeC
         for nv in _items(data).values
     }
     assert values["IJK"] == pytest.approx((0.0, 0.0, 1.0))
-    assert values["IJKAct"] == pytest.approx((0.0, 0.0, 1.0))
+    assert values["IJKAct"] == pytest.approx((2.0,))  # Table 32: 2 = IJK is the nominal vector
 
 
 async def test_on_pt_meas_report_ijk_falls_back_to_motion_vector(
@@ -95,4 +95,4 @@ async def test_on_pt_meas_report_ijk_falls_back_to_motion_vector(
 async def test_on_pt_meas_report_rejects_unknown_name(started_client: IppDmeClient) -> None:
     with pytest.raises(IppDmeServerError) as excinfo:
         await started_client.call(CommandName.ON_PT_MEAS_REPORT, NamedValue("Bogus", ()))
-    assert excinfo.value.error.number == "0506"
+    assert excinfo.value.error.number == "0510"  # Table 75: "Bad property"

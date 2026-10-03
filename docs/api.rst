@@ -17,6 +17,9 @@ API Reference
 .. automodule:: pyippdme.client.features
    :members:
 
+.. automodule:: pyippdme.client.events
+   :members:
+
 .. automodule:: pyippdme.client.call
    :members:
 
@@ -92,7 +95,13 @@ API Reference
 .. automodule:: pyippdme.rawdata
    :members:
 
+.. automodule:: pyippdme.rawdata.formats
+   :members:
+
 .. automodule:: pyippdme.rawdata.transfer
+   :members:
+
+.. automodule:: pyippdme.protocol.conformance
    :members:
 
 .. automodule:: pyippdme.types.vec3

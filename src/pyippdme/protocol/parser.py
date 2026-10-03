@@ -29,6 +29,8 @@ methods, which always emit exactly the spacing the standard requires.
 
 from __future__ import annotations
 
+import re
+
 from lark import Lark, Token, Transformer
 from lark.exceptions import LarkError, VisitError
 
@@ -71,7 +73,7 @@ data: numeric_data | property_data | string_value | name_value | items | xml_val
 numeric_data: NUMBER ("," NUMBER)*
 property_data: STRING "," STRING
 string_value: STRING
-name_value: BASICNAME
+name_value: NAME
 xml_value: XML
 items: named_group ("," named_group)*
 named_group: NAME "(" (arglist | XML)? ")"
@@ -96,6 +98,29 @@ XML: /<[^)]*/
 """
 
 
+_XML_PLACEHOLDER = "<X>"
+_XML_START = re.compile(r"(?:\(\s*|#\s*)(<)")
+
+
+def _protect_xml(text: str) -> tuple[str, str | None]:
+    """Replace an XML payload by a short placeholder before parsing.
+
+    The standard leaves the XML production undefined, and ``)`` is legal XML
+    text, so the payload cannot be delimited by the grammar. It is the part of
+    the line from a ``<`` right after ``(`` or ``#`` to the last ``>``.
+    """
+    match = next(
+        (m for m in _XML_START.finditer(text) if text.count('"', 0, m.start(1)) % 2 == 0), None
+    )
+    if match is None:
+        return text, None
+    start = match.start(1)
+    end = text.rfind(">")
+    if end < start:
+        return text, None
+    return text[:start] + _XML_PLACEHOLDER + text[end + 1 :], text[start : end + 1]
+
+
 class _AstTransformer(Transformer[Token, object]):
     """Builds :mod:`pyippdme.protocol.ast` nodes from a Lark parse tree.
 
@@ -111,7 +136,11 @@ class _AstTransformer(Transformer[Token, object]):
     def STRING(self, token: Token) -> String:  # noqa: N802
         return String(str(token)[1:-1])
 
+    xml_text: str | None = None
+
     def XML(self, token: Token) -> Xml:  # noqa: N802
+        if str(token) == _XML_PLACEHOLDER and self.xml_text is not None:
+            return Xml(self.xml_text)
         return Xml(str(token))
 
     def tag(self, children: list[object]) -> object:
@@ -221,7 +250,6 @@ _LARK = Lark(
     lexer="dynamic",
     maybe_placeholders=False,
 )
-_TRANSFORMER = _AstTransformer()
 
 
 def _parse(text: str, start: str) -> object:
@@ -233,8 +261,11 @@ def _parse(text: str, start: str) -> object:
     callers only ever see :class:`IppDmeProtocolError`.
     """
     try:
-        tree = _LARK.parse(text, start=start)
-        return _TRANSFORMER.transform(tree)
+        protected, xml_text = _protect_xml(text)
+        tree = _LARK.parse(protected, start=start)
+        transformer = _AstTransformer()
+        transformer.xml_text = xml_text
+        return transformer.transform(tree)
     except VisitError as exc:
         if isinstance(exc.orig_exc, IppDmeProtocolError):
             raise exc.orig_exc from exc

@@ -21,6 +21,7 @@ from pyippdme.protocol.commands import CommandName
 from pyippdme.server.classes import register_dme_class, register_server_class
 from pyippdme.server.registry import CommandRegistry, MachineState, commands_of, register_subset
 from pyippdme.simulation.classes import register_scanning_class
+from pyippdme.simulation.state import SimulationState
 
 
 async def test_restricted_command_classes_omit_other_classes_commands() -> None:
@@ -122,8 +123,8 @@ def test_register_subset_leaves_other_already_registered_commands_alone() -> Non
 
 
 async def test_register_subset_reflects_correctly_in_get_supported_commands() -> None:
-    server: IppDmeServer[MachineState] = IppDmeServer(
-        command_classes=[register_server_class, register_dme_class]
+    server: IppDmeServer[SimulationState] = IppDmeServer(
+        command_classes=[register_server_class, register_dme_class], state_factory=SimulationState
     )
     register_subset(server.registry, register_scanning_class, keep={CommandName.SCAN_ON_LINE})
     port = await server.start("127.0.0.1", 0)

@@ -11,7 +11,7 @@ in-process stand-in with every built-in command class enabled (coordinate
 queries and motion, coordinate-system transformations, tool parameter
 blocks, scanning, form-tester alignment, mover/temperature-compensation
 commands, a rotary table, and raw-data acquisition/retrieval) - see
-pyippdme.server.virtual_cmm for what each one covers and doesn't.
+pyippdme.simulation for what each one covers and doesn't.
 
     python examples/virtual_cmm_server.py
     python examples/virtual_cmm_server.py --port 1294 --csy-dir ~/.pyippdme/csy
@@ -33,8 +33,7 @@ import asyncio
 import contextlib
 from pathlib import Path
 
-from pyippdme.server.virtual_cmm import VirtualCMM
-
+from pyippdme import VirtualCMM
 from pyippdme.types.csy import FileCsyStore
 
 

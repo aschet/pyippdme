@@ -37,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from typing import Generic
@@ -49,11 +50,12 @@ from pyippdme.protocol.ast import (
     DataResponse,
     DoneResponse,
     ErrorResponse,
+    EventTag,
     Response,
     TagLike,
 )
 from pyippdme.protocol.codec import decode_command_line, encode_line
-from pyippdme.protocol.commands import CommandName
+from pyippdme.protocol.commands import PROPERTY_NAMES, CommandName
 from pyippdme.protocol.errors import DEFAULT_ERRORS, ErrorCode, ErrorSeverity, ServerError
 from pyippdme.protocol.hooks import LineHook, call_line_hook
 from pyippdme.protocol.network import (
@@ -102,6 +104,22 @@ _SESSION_EXEMPT_COMMANDS = frozenset({CommandName.START_SESSION, CommandName.END
 #: (Annex B); its text comes straight from DEFAULT_ERRORS rather
 #: than being repeated here, so the two can't drift apart.
 _TRANSACTION_ABORTED_TEXT = DEFAULT_ERRORS[ErrorCode.TRANSACTION_ABORTED][1]
+#: The tag a protocol error is reported under when the offending line has no usable tag.
+_NO_TAG = "00000"
+_TAG_SHAPE_RE = re.compile(r"^(\d{5}|E\d{4})$")
+_METHOD_NAME_RE = re.compile(r"^.{5} ([A-Za-z][A-Za-z0-9]*)\(")
+
+
+def _check_line(line: str) -> tuple[ErrorCode, str] | None:
+    """Return the pre-defined error a syntactically unusable line deserves, if any (5.1, 5.4)."""
+    raw = line.removesuffix("\r\n")
+    if any(not 32 <= ord(c) <= 126 for c in raw):
+        return ErrorCode.ILLEGAL_CHARACTER, "Illegal character"
+    if not _TAG_SHAPE_RE.match(raw[:5]) or raw[:5] in ("00000", "E0000"):
+        return ErrorCode.ILLEGAL_TAG, "Illegal tag"
+    if raw[5:6] != " ":
+        return ErrorCode.NO_SPACE_AT_POSITION_6, "No space at pos. 6"
+    return None
 
 
 @dataclass(slots=True)
@@ -117,12 +135,13 @@ class _ServerConnection(Generic[StateT]):
         registry: CommandRegistry,
         backend: MachineBackend | None,
         csy_store: CsyStore,
-        machine_class: str,
+        machine_class: str | tuple[str, ...],
         state_factory: Callable[[], StateT],
         network: Network,
         sample_surface: SampleSurface | None = None,
         on_line_received: LineHook | None = None,
         on_line_sent: LineHook | None = None,
+        previous_state: StateT | None = None,
     ) -> None:
         self._transport = transport
         self._network = network
@@ -134,6 +153,8 @@ class _ServerConnection(Generic[StateT]):
         self._on_line_sent = on_line_sent
         self.state = state_factory()
         self.state.machine_class = machine_class
+        if previous_state is not None:
+            self.state.carry_over_from(previous_state)
         self._queue: asyncio.Queue[tuple[TagLike, str, tuple[Argument, ...]]] = asyncio.Queue()
         self._active: dict[str, _ActiveTransaction] = {}
         self._worker_task: asyncio.Task[None] | None = None
@@ -142,7 +163,7 @@ class _ServerConnection(Generic[StateT]):
         self._worker_task = asyncio.create_task(self._worker_loop())
         try:
             while True:
-                line = await self._transport.read_line()
+                line = await self._transport.read_line(lenient=True)
                 if self._on_line_received is not None:
                     call_line_hook(self._on_line_received, line.removesuffix("\r\n"))
                 await self._handle_line(line)
@@ -155,10 +176,15 @@ class _ServerConnection(Generic[StateT]):
             await self._transport.close()
 
     async def _handle_line(self, line: str) -> None:
-        try:
-            command = decode_command_line(line)
-        except IppDmeProtocolError as exc:
-            logger.warning("Discarding unparseable line from %s: %s", self._transport.peer, exc)
+        malformed = _check_line(line)
+        if malformed is None:
+            try:
+                command = decode_command_line(line)
+            except IppDmeProtocolError as exc:
+                logger.warning("Unparseable line from %s: %s", self._transport.peer, exc)
+                malformed = (ErrorCode.PROTOCOL_ERROR, "Protocol error")
+        if malformed is not None:
+            await self._reject_malformed_line(line, *malformed)
             return
         tag, name, args = command.tag, command.method.name, command.method.args
 
@@ -201,7 +227,11 @@ class _ServerConnection(Generic[StateT]):
             await self._execute(tag, name, args, cancel)
         except asyncio.CancelledError:
             await self._send_error(
-                tag, ErrorSeverity.ERROR, ErrorCode.TRANSACTION_ABORTED, _TRANSACTION_ABORTED_TEXT
+                tag,
+                ErrorSeverity.ERROR,
+                ErrorCode.TRANSACTION_ABORTED,
+                _TRANSACTION_ABORTED_TEXT,
+                cause=name,
             )
 
     async def _handle_abort_e(self, tag: TagLike) -> None:
@@ -211,12 +241,13 @@ class _ServerConnection(Generic[StateT]):
         pending: list[tuple[TagLike, str, tuple[Argument, ...]]] = []
         while not self._queue.empty():
             pending.append(self._queue.get_nowait())
-        for pending_tag, _name, _args in pending:
+        for pending_tag, pending_name, _args in pending:
             await self._send_error(
                 pending_tag,
                 ErrorSeverity.ERROR,
                 ErrorCode.TRANSACTION_ABORTED,
                 _TRANSACTION_ABORTED_TEXT,
+                cause=pending_name,
             )
 
         # "stop executing any currently executing commands": cancel everything
@@ -230,6 +261,16 @@ class _ServerConnection(Generic[StateT]):
         if active:
             await asyncio.gather(*(txn.task for txn in active), return_exceptions=True)
 
+        # 6.3.1 (AbortE): the client "must invoke ClearAllErrors() before the
+        # server will process new commands", even if nothing was running.
+        if self.state.active_error is None:
+            self.state.active_error = ServerError(
+                ErrorSeverity.ERROR,
+                ErrorCode.TRANSACTION_ABORTED,
+                CommandName.ABORT_E,
+                _TRANSACTION_ABORTED_TEXT,
+            )
+
         self._write(DoneResponse(tag))
         await self._transport.drain()
 
@@ -238,7 +279,11 @@ class _ServerConnection(Generic[StateT]):
     ) -> None:
         if not self.state.session_active and name not in _SESSION_EXEMPT_COMMANDS:
             await self._send_error(
-                tag, ErrorSeverity.CRITICAL, ErrorCode.PROTOCOL_ERROR, "No session active"
+                tag,
+                ErrorSeverity.CRITICAL,
+                ErrorCode.PROTOCOL_ERROR,
+                "No session active",
+                cause=name,
             )
             return
         active_error = self.state.active_error
@@ -252,13 +297,27 @@ class _ServerConnection(Generic[StateT]):
                 ErrorSeverity.ERROR,
                 ErrorCode.USE_CLEAR_ALL_ERRORS,
                 "Use ClearAllErrors to continue",
+                cause=name,
             )
             return
 
         handler = self._registry.get(name)
+        if handler is None and name in PROPERTY_NAMES:
+            await self._send_error(
+                tag,
+                ErrorSeverity.CRITICAL,
+                ErrorCode.BAD_CONTEXT,
+                "Bad context",
+                cause=name,
+            )
+            return
         if handler is None:
             await self._send_error(
-                tag, ErrorSeverity.CRITICAL, ErrorCode.UNSUPPORTED_COMMAND, "Unsupported command"
+                tag,
+                ErrorSeverity.CRITICAL,
+                ErrorCode.UNSUPPORTED_COMMAND,
+                "Unsupported command",
+                cause=name,
             )
             return
 
@@ -330,7 +389,7 @@ class _ServerConnection(Generic[StateT]):
                 await self._transport.drain()
 
     async def _send_error(
-        self, tag: TagLike, severity: ErrorSeverity, number: str, text: str, *, cause: str = ""
+        self, tag: TagLike, severity: ErrorSeverity, number: str, text: str, *, cause: str
     ) -> None:
         if severity.requires_clear_all_errors and self.state.active_error is None:
             self.state.active_error = ServerError(severity, number, cause, text)
@@ -338,6 +397,44 @@ class _ServerConnection(Generic[StateT]):
         await self._transport.drain()
         self._write(DoneResponse(tag))
         await self._transport.drain()
+        if severity.requires_clear_all_errors:
+            await self._abort_pending()
+
+    async def _abort_pending(self) -> None:
+        """Reject every command still waiting in the queue (5.6: an error aborts all pending)."""
+        while not self._queue.empty():
+            pending_tag, pending_name, _args = self._queue.get_nowait()
+            self._write(
+                ErrorResponse(
+                    pending_tag,
+                    int(ErrorSeverity.ERROR),
+                    ErrorCode.TRANSACTION_ABORTED,
+                    pending_name,
+                    _TRANSACTION_ABORTED_TEXT,
+                )
+            )
+            self._write(DoneResponse(pending_tag))
+            await self._transport.drain()
+
+    async def _reject_malformed_line(self, line: str, number: ErrorCode, text: str) -> None:
+        """Answer a line that is not a valid command with the matching pre-defined error (5.6)."""
+        raw = line.removesuffix("\r\n")
+        tag_text = raw[:5] if _TAG_SHAPE_RE.match(raw[:5]) and raw[:5] != "E0000" else _NO_TAG
+        method = _METHOD_NAME_RE.match(raw)
+        cause = method.group(1) if method is not None else "Protocol"
+        severity = DEFAULT_ERRORS[number][0]
+        if severity.requires_clear_all_errors and self.state.active_error is None:
+            self.state.active_error = ServerError(severity, number, cause, text)
+        self._write_raw(f'{tag_text} ! Error({int(severity)},{number},"{cause}","{text}")')
+        self._write_raw(f"{tag_text} %")
+        await self._transport.drain()
+        if severity.requires_clear_all_errors:
+            await self._abort_pending()
+
+    def _write_raw(self, text: str) -> None:
+        if self._on_line_sent is not None:
+            call_line_hook(self._on_line_sent, text)
+        self._transport.write_line((text + "\r\n").encode("ascii"))
 
     def _write(self, node: Response) -> None:
         if self._on_line_sent is not None:
@@ -431,7 +528,7 @@ class IppDmeServer(Generic[StateT]):
         *,
         backend: MachineBackend | None = None,
         csy_store: CsyStore | None = None,
-        machine_class: str = DEFAULT_MACHINE_CLASS,
+        machine_class: str | Sequence[str] = DEFAULT_MACHINE_CLASS,
         command_classes: Sequence[Callable[[CommandRegistry], None]] = (),
         state_factory: Callable[[], StateT] = MachineState,  # type: ignore[assignment]
         network: Network = TCP_NETWORK,
@@ -447,7 +544,9 @@ class IppDmeServer(Generic[StateT]):
         self.backend = backend
         self._state_factory = state_factory
         self.csy_store: CsyStore = csy_store if csy_store is not None else InMemoryCsyStore()
-        self.machine_class = machine_class
+        self.machine_class: str | tuple[str, ...] = (
+            machine_class if isinstance(machine_class, str) else tuple(machine_class)
+        )
         #: Where this server's listener (and anything a handler has to open) comes from.
         self.network = network
         #: The synthetic part ``PtMeas`` measures against, if any; see
@@ -469,6 +568,8 @@ class IppDmeServer(Generic[StateT]):
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
         self._listener: Listener | None = None
+        self._last_state: StateT | None = None
+        self._connections: list[_ServerConnection[StateT]] = []
 
     async def start(self, host: str = "127.0.0.1", port: int = 0) -> int:
         """Bind and start accepting connections without blocking; return the bound port.
@@ -492,6 +593,22 @@ class IppDmeServer(Generic[StateT]):
         if self._listener is None:
             return None
         return self._listener.port
+
+    @property
+    def active_state(self) -> StateT | None:
+        """The state of the connected client, or ``None``; only one is connected at a time (5.8)."""
+        return self._connections[-1].state if self._connections else None
+
+    async def send_event(self, payload: DataPayload) -> bool:
+        """Send an unsolicited event (tag ``E0000``, 5.5.1) to the connected client.
+
+        Returns whether a client was connected. See
+        :mod:`pyippdme.server.builders` for the pre-defined events of 5.5.3.
+        """
+        if not self._connections:
+            return False
+        await self._connections[-1]._emit_event(EventTag.UNSOLICITED, payload)
+        return True
 
     async def serve_forever(
         self,
@@ -523,8 +640,14 @@ class IppDmeServer(Generic[StateT]):
             self.sample_surface,
             self.on_line_received,
             self.on_line_sent,
+            self._last_state,
         )
-        await connection.run()
+        self._connections.append(connection)
+        try:
+            await connection.run()
+        finally:
+            self._connections.remove(connection)
+            self._last_state = connection.state
         logger.info("Client disconnected: %s", transport.peer)
         if self.on_disconnect is not None:
             call_line_hook(self.on_disconnect, transport.peer)

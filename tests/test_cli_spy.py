@@ -26,7 +26,7 @@ _SESSION_LOG_LINE_RE = re.compile(
 
 def test_strip_tag_drops_the_leading_tag_and_keeps_the_rest() -> None:
     assert strip_tag("00001 StartSession()") == "StartSession()"
-    assert strip_tag('00002 # DMEVersion("2.5")') == '# DMEVersion("2.5")'
+    assert strip_tag('00002 # GetDMEVersion("2.5")') == '# GetDMEVersion("2.5")'
     assert strip_tag("00003 %") == "%"
 
 
@@ -75,7 +75,7 @@ async def test_session_log_is_interleaved_timestamped_marked_and_tag_kept(
         ("<", "00001 %"),
         (">", "00002 GetDMEVersion()"),
         ("<", "00002 &"),
-        ("<", '00002 # DMEVersion("2.5")'),
+        ("<", '00002 # GetDMEVersion("2.5")'),
         ("<", "00002 %"),
     ]
 

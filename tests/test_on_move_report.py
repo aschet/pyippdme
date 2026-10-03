@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MPL-2.0
 
-"""Tests for Mover's OnMoveReport/OnMoveReportE daemon (VDMA 8722 6.7.1 Table 68)."""
+"""Tests for Mover's OnMoveReport/OnMoveReportE daemon (VDMA 8722 6.10.2 Table 68)."""
 
 from __future__ import annotations
 

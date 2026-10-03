@@ -67,6 +67,8 @@ async def _start_session(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult
 
 async def _end_session(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
     ctx.state.session_active = False
+    # 6.3.1: "The method must make sure that all daemons are stopped".
+    _run_daemon_stoppers(ctx, None)
     # No resources of its own to release - a class holding session-scoped
     # resources (e.g. rawdata_class's buffered acquisitions, 6.15.1's
     # "EndSession() implicitly deletes all buffered acquisitions") registers

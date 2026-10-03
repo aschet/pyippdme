@@ -84,8 +84,8 @@ async def test_min_max_def_are_read_only(started_client: IppDmeClient) -> None:
 async def test_unrelated_property_falls_back_to_generic_store(
     started_client: IppDmeClient,
 ) -> None:
-    await started_client.call(CommandName.SET_PROP, NamedValue("Custom.Thing", (Number.of(42),)))
-    (data,) = await started_client.call(CommandName.GET_PROP, NamedValue("Custom.Thing", ()))
+    await started_client.call(CommandName.SET_PROP, NamedValue("XXCustom.Thing", (Number.of(42),)))
+    (data,) = await started_client.call(CommandName.GET_PROP, NamedValue("XXCustom.Thing", ()))
     assert _num(_items(data).values[0]) == 42
 
 
@@ -113,7 +113,7 @@ async def test_tool_command_returns_active_tool_name(started_client: IppDmeClien
 
 async def test_is_alignable_is_false_for_fixed_tool(started_client: IppDmeClient) -> None:
     (data,) = await started_client.call(CommandName.IS_ALIGNABLE)
-    assert data.to_wire() == "0"
+    assert data.to_wire() == "IsAlignable(0)"
 
 
 async def test_tool_name_reports_the_active_tool(started_client: IppDmeClient) -> None:
@@ -124,14 +124,14 @@ async def test_tool_name_reports_the_active_tool(started_client: IppDmeClient) -
     assert arg.value == "RefTool"
 
 
-async def test_found_tool_name_reports_no_tool_before_find_tool(
+async def test_found_tool_name_reports_undef_tool_before_find_tool(
     started_client: IppDmeClient,
 ) -> None:
     (data,) = await started_client.call(CommandName.GET_PROP, NamedValue("FoundTool.Name", ()))
     (value,) = _items(data).values
     arg = value.args[0]
     assert isinstance(arg, String)
-    assert arg.value == "NoTool"
+    assert arg.value == "UnDefTool"
 
 
 async def test_found_tool_id_after_find_tool(started_client: IppDmeClient) -> None:

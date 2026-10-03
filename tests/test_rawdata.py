@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import socket
-import struct
 from multiprocessing import shared_memory
 from pathlib import Path
 from urllib.parse import urlparse
@@ -22,8 +21,8 @@ from pyippdme.protocol.ast import BasicName, DataPayload, Items, NamedValue, Num
 from pyippdme.protocol.commands import CommandName
 from pyippdme.protocol.network import TCP_NETWORK, MemoryNetwork, Network
 from pyippdme.protocol.parameters import ParameterName
+from pyippdme.rawdata.formats import unpack_esbf
 from pyippdme.simulation.classes.rawdata_class import _SWEEP_POINTS_PER_SEGMENT
-from pyippdme.types.pointcloud import from_xml as point_cloud_from_xml
 from pyippdme.types.rawdata import from_xml as adv_data_struct_from_xml
 
 
@@ -77,9 +76,9 @@ async def _read_points(client: IppDmeClient, name: str) -> tuple[tuple[float, fl
     url = item.args[0]
     assert isinstance(url, String)
     path = _path_from_file_url(url.value)
-    cloud_set = point_cloud_from_xml(path.read_text())
-    (point_set,) = cloud_set.point_clouds[0].point_sets
-    return tuple((p.x, p.y, p.z) for p in point_set.points)
+    scan = unpack_esbf(path.read_bytes())
+    (point_set,) = scan.groups[0]
+    return tuple((float(x), float(y), float(z)) for x, y, z in point_set.points)
 
 
 async def test_adv_data_struct_is_parseable_xml(started_client: IppDmeClient) -> None:
@@ -88,6 +87,7 @@ async def test_adv_data_struct_is_parseable_xml(started_client: IppDmeClient) ->
     assert isinstance(data[0], Xml)
     struct_data = adv_data_struct_from_xml(data[0].raw)
     assert struct_data.return_technologies == {"SocBin", "ShaMem", "File"}
+    assert struct_data.format == "ESBF"
 
 
 async def test_data_acquire_single_shot_at_current_position(
@@ -186,16 +186,17 @@ async def test_get_raw_data_sha_mem_round_trips(started_client: IppDmeClient) ->
     assert isinstance(name_value, String)
     size_value = values["Size"]
     assert isinstance(size_value, Number)
-    assert int(size_value.value) == 24  # one MeasPoint == 3 doubles
+    size = int(size_value.value)
 
     segment = shared_memory.SharedMemory(name=name_value.value)
     try:
         assert segment.buf is not None
-        (x, y, z) = struct.unpack("<3d", bytes(segment.buf[:24]))
-        # Not exactly (0, 0, 0): a little measurement noise is added.
-        assert (x, y, z) == pytest.approx((0.0, 0.0, 0.0), abs=0.05)
+        scan = unpack_esbf(bytes(segment.buf[:size]))
     finally:
         segment.close()
+    ((x, y, z),) = scan.points()
+    # Not exactly (0, 0, 0): a little measurement noise is added.
+    assert (x, y, z) == pytest.approx((0.0, 0.0, 0.0), abs=0.05)
 
     await started_client.call(CommandName.RELEASE_SHA_MEM, String("Acq1"))
 
@@ -225,7 +226,7 @@ async def _stream_bin(client: IppDmeClient, network: Network) -> bytes:
     async def bin_client() -> bytes:
         await asyncio.sleep(0.05)
         reader, writer = await network.open_connection("127.0.0.1", port)
-        payload = await reader.read(1024)
+        payload = await reader.read()
         writer.close()
         return payload
 
@@ -239,8 +240,10 @@ async def test_get_raw_data_bin_streams_over_the_negotiated_port(
     started_client: IppDmeClient, network: MemoryNetwork
 ) -> None:
     payload = await _stream_bin(started_client, network)
+    scan = unpack_esbf(payload)
+    assert scan.data_format == "double"
     # Not exactly (0, 0, 0): a little measurement noise is added.
-    (x, y, z) = struct.unpack("<3d", payload)
+    ((x, y, z),) = scan.points()
     assert (x, y, z) == pytest.approx((0.0, 0.0, 0.0), abs=0.05)
 
 
@@ -251,8 +254,33 @@ async def test_get_raw_data_bin_streams_over_real_tcp(tcp_server_port: int) -> N
         payload = await _stream_bin(client, TCP_NETWORK)
     finally:
         await client.close()
-    (x, y, z) = struct.unpack("<3d", payload)
+    ((x, y, z),) = unpack_esbf(payload).points()
     assert (x, y, z) == pytest.approx((0.0, 0.0, 0.0), abs=0.05)
+
+
+async def test_live_mode_sends_the_points_while_acquiring_and_stores_nothing(
+    started_client: IppDmeClient, network: MemoryNetwork
+) -> None:
+    port = _free_port()
+    await started_client.call(
+        CommandName.RAW_DATA_BIN_SETUP, BasicName("float"), Number.of(port), BasicName("On")
+    )
+
+    async def bin_client() -> bytes:
+        await asyncio.sleep(0.05)
+        reader, writer = await network.open_connection("127.0.0.1", port)
+        payload = await reader.read()
+        writer.close()
+        return payload
+
+    _result, payload = await asyncio.gather(_acquire(started_client, "Live1"), bin_client())
+    scan = unpack_esbf(payload)
+    assert scan.data_format == "float"
+    assert len(scan.points()) == 1
+    # 6.15.1: with LiveMode(On) the acquisition is not stored under its name.
+    with pytest.raises(IppDmeServerError) as excinfo:
+        await started_client.call(CommandName.GET_RAW_DATA_FILE, String("Live1"))
+    assert excinfo.value.error.number == "2003"
 
 
 async def test_get_raw_data_bin_without_setup_raises_0508(started_client: IppDmeClient) -> None:

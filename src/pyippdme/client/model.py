@@ -36,6 +36,7 @@ from pyippdme.client.builders import CurvePoint as CurvePoint
 from pyippdme.client.builders import PartAlignment as PartAlignment
 from pyippdme.client.builders import ToolAlignment as ToolAlignment
 from pyippdme.client.call import call_handle, stream_handle, unrecorded
+from pyippdme.client.events import ServerEvent, parse_event
 from pyippdme.client.features import Shape as Shape
 from pyippdme.client.report import Report, ReportValue, report_from_payload
 from pyippdme.client.transaction import Transaction
@@ -82,6 +83,15 @@ def _numeric(payload: DataPayload) -> tuple[float, ...]:
     if not isinstance(payload, NumericData):
         raise TypeError(f"Expected a NumericData response, got {type(payload).__name__}")
     return tuple(n.value for n in payload.values)
+
+
+def _single_number(payload: DataPayload) -> float:
+    """Read a response that holds one number, bare (``1``) or named (``IsHomed(1)``)."""
+    if isinstance(payload, NumericData):
+        (value,) = _numeric(payload)
+        return value
+    (named,) = _items(payload)
+    return _num(named)
 
 
 def _string_value(payload: DataPayload) -> str:
@@ -218,8 +228,18 @@ class Server:
         await self._client.call(CommandName.SET_PROP, *arguments)
 
     def unsolicited_events(self) -> AsyncIterator[DataResponse]:
-        """Iterate the events the server sends on its own with tag ``E0000`` (5.5.1)."""
+        """Iterate the events the server sends on its own with tag ``E0000`` (5.5.1), raw."""
         return self._client.unsolicited_events()
+
+    async def events(self) -> AsyncIterator[ServerEvent]:
+        """Iterate the events the server sends on its own, as the pre-defined ones of 5.5.3.
+
+        ``KeyPress``, ``GoTo``, ``PtMeas``, ``ChangeTool``, ``SetProp`` and
+        ``OpenToolCollection`` become :mod:`pyippdme.client.events` objects; any other
+        event comes as :class:`~pyippdme.client.events.UnknownEvent`.
+        """
+        async for response in self._client.unsolicited_events():
+            yield parse_event(response)
 
     @call_handle
     async def start_session(self) -> None:
@@ -267,8 +287,7 @@ class Server:
 
     @call_handle
     async def get_err_status(self) -> bool:
-        (value,) = _numeric(_only(await self._client.call(CommandName.GET_ERR_STATUS_E)))
-        return value != 0.0
+        return _single_number(_only(await self._client.call(CommandName.GET_ERR_STATUS_E))) != 0.0
 
     @call_handle
     async def enum_prop(self, reference: str) -> tuple[tuple[str, str], ...]:
@@ -341,8 +360,7 @@ class Dme:
 
     @call_handle
     async def is_homed(self) -> bool:
-        payload = _only(await self._client.call(CommandName.IS_HOMED))
-        return _named_numbers(payload)[CommandName.IS_HOMED] != 0.0
+        return _single_number(_only(await self._client.call(CommandName.IS_HOMED))) != 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -601,6 +619,63 @@ class ToolParameterValue:
     act: float
 
 
+@dataclass(frozen=True, slots=True)
+class OrientedBox:
+    """One oriented bounding box of ``Tool.CollisionVolume()`` (Table 117)."""
+
+    center: Vec3
+    extension: Vec3
+    i: Vec3
+    j: Vec3
+    k: Vec3
+
+    @classmethod
+    def from_numbers(cls, n: Sequence[float]) -> OrientedBox:
+        return cls(
+            (n[0], n[1], n[2]), (n[3], n[4], n[5]), (n[6], n[7], n[8]), (n[9], n[10], n[11]),
+            (n[12], n[13], n[14]),
+        )  # fmt: skip
+
+
+@dataclass(frozen=True, slots=True)
+class AlignmentSphere:
+    """One sphere of ``Tool.AlignmentVolume()`` (Table 118)."""
+
+    center: Vec3
+    radius: float
+
+    @classmethod
+    def from_numbers(cls, n: Sequence[float]) -> AlignmentSphere:
+        return cls((n[0], n[1], n[2]), n[3])
+
+
+VolumeT = TypeVar("VolumeT")
+
+
+def _volume_items(
+    args: Sequence[Argument],
+    separator: str,
+    width: int,
+    build: Callable[[Sequence[float]], VolumeT],
+) -> tuple[VolumeT, ...]:
+    """Split ``SEP,n1,...,nW,SEP,...`` into the items the separator introduces."""
+    items: list[VolumeT] = []
+    numbers: list[float] = []
+    started = False
+    for value in args:
+        if isinstance(value, BasicName) and value.value == separator:
+            if started:
+                items.append(build(numbers))
+            started, numbers = True, []
+        elif isinstance(value, Number) and started:
+            numbers.append(value.value)
+        else:
+            raise TypeError(f"Unexpected {value!r} in a {separator} list")
+    if started:
+        items.append(build(numbers))
+    return tuple(items)
+
+
 class _ToolProperties:
     """The read-only properties ``Tool`` and ``FoundTool`` have in common (6.10.3)."""
 
@@ -622,7 +697,7 @@ class _ToolProperties:
 
     @call_handle
     async def get_name(self) -> str:
-        """Return the tool's name, or ``"NoTool"`` if there is none."""
+        """Return the tool's name, which can be ``"NoTool"`` or ``"UnDefTool"`` (6.10.3)."""
         return await self._string_property("Name")
 
     @call_handle
@@ -643,15 +718,38 @@ class _ToolProperties:
         """Return when the tool was last qualified, as the server's ISO 8601 UTC string."""
         return await self._string_property("LastQualified")
 
-    @call_handle
-    async def get_alignment(self) -> tuple[float, ...]:
-        """Return the alignment vector(s) of an alignable tool (6.20)."""
+    async def _numbers(self, leaf: str) -> tuple[float, ...]:
         numbers = []
-        for value in (await self._property("Alignment")).args:
+        for value in (await self._property(leaf)).args:
             if not isinstance(value, Number):
                 raise TypeError(f"Expected numbers, got {type(value).__name__}")
             numbers.append(value.value)
         return tuple(numbers)
+
+    @call_handle
+    async def get_alignment(self) -> tuple[float, ...]:
+        """Return the alignment vector(s) of an alignable tool (6.20.2)."""
+        return await self._numbers("Alignment")
+
+    @call_handle
+    async def get_avr_offsets(self) -> Vec3:
+        """Return the average offsets of the tool tip (6.20.2)."""
+        x, y, z = await self._numbers("AvrOffsets")
+        return (x, y, z)
+
+    @call_handle
+    async def get_collision_volume(self) -> tuple[OrientedBox, ...]:
+        """Return the oriented bounding boxes that contain the tool (6.20.2)."""
+        return _volume_items(
+            (await self._property("CollisionVolume")).args, "OBB", 15, OrientedBox.from_numbers
+        )
+
+    @call_handle
+    async def get_alignment_volume(self) -> tuple[AlignmentSphere, ...]:
+        """Return the spheres the tool turns in while it is aligned (6.20.2)."""
+        return _volume_items(
+            (await self._property("AlignmentVolume")).args, "SPH", 4, AlignmentSphere.from_numbers
+        )
 
 
 class FoundTool(_ToolProperties):
@@ -669,7 +767,7 @@ class Tool(_ToolProperties):
 
     @call_handle
     async def re_qualify(self) -> None:
-        """Requalify the active tool (6.10.1)."""
+        """Requalify the active tool (6.10.2)."""
         await self._client.call(CommandName.RE_QUALIFY)
 
     @call_handle
@@ -701,8 +799,8 @@ class Tool(_ToolProperties):
 
     @call_handle
     async def is_optimize_enabled(self) -> bool:
-        (value,) = _numeric(_only(await self._client.call(CommandName.IS_OPTIMIZE_ENABLED)))
-        return value != 0.0
+        payload = _only(await self._client.call(CommandName.IS_OPTIMIZE_ENABLED))
+        return _single_number(payload) != 0.0
 
     @call_handle
     async def calc_tool_alignment(
@@ -738,35 +836,40 @@ class Tool(_ToolProperties):
 
     @call_handle
     async def avr_radius(self) -> float:
-        """Average effective radius of the tool tip (6.20)."""
-        (value,) = _numeric(_only(await self._client.call(CommandName.AVR_RADIUS)))
-        return value
-
-    @call_handle
-    async def avr_offsets(self) -> Vec3:
-        """Average offsets of the tool tip (6.20)."""
-        values = {
-            name.upper(): value
-            for name, value in _named_numbers(
-                _only(await self._client.call(CommandName.AVR_OFFSETS))
-            ).items()
-        }
-        return (values["X"], values["Y"], values["Z"])
-
-    @call_handle
-    async def collision_volume(self) -> tuple[DataPayload, ...]:
-        """Return the tool's collision volume as raw response lines (6.20)."""
-        return await self._client.call(CommandName.COLLISION_VOLUME)
-
-    @call_handle
-    async def alignment_volume(self) -> tuple[DataPayload, ...]:
-        """Return the tool's alignment volume as raw response lines (6.20)."""
-        return await self._client.call(CommandName.ALIGNMENT_VOLUME)
+        """Average effective radius of the tool tip (6.20.1)."""
+        return _single_number(_only(await self._client.call(CommandName.AVR_RADIUS)))
 
     @call_handle
     async def is_alignable(self) -> bool:
-        (value,) = _numeric(_only(await self._client.call(CommandName.IS_ALIGNABLE)))
-        return value != 0.0
+        return _single_number(_only(await self._client.call(CommandName.IS_ALIGNABLE))) != 0.0
+
+    async def _pointer(self, command: str) -> str:
+        return _name_value(_only(await self._client.call(command)))
+
+    @call_handle
+    async def pointer(self) -> str:
+        """Return the name of the active tool, which can be ``"NoTool"`` (Table 64)."""
+        return await self._pointer(CommandName.TOOL)
+
+    @call_handle
+    async def go_to_par(self) -> str:
+        """Return the pointer to the ``GoToPar`` parameter block (6.10.4)."""
+        return await self._pointer(CommandName.GO_TO_PAR)
+
+    @call_handle
+    async def pt_meas_par(self) -> str:
+        """Return the pointer to the ``PtMeasPar`` parameter block (Table 77)."""
+        return await self._pointer(CommandName.PT_MEAS_PAR)
+
+    @call_handle
+    async def scan_par(self) -> str:
+        """Return the pointer to the ``ScanPar`` parameter block (6.13.2)."""
+        return await self._pointer(CommandName.SCAN_PAR)
+
+    @call_handle
+    async def opt_par(self) -> str:
+        """Return the pointer to the ``OptPar`` parameter block of an optical tool (6.10.4)."""
+        return await self._pointer(CommandName.OPT_PAR)
 
     @call_handle
     async def get_parameter(self, block: str, name: str) -> ToolParameterValue:
@@ -808,6 +911,9 @@ _REPORT_WIDTHS: Mapping[str, int] = {
     "Tool.A": 1,
     "Tool.B": 1,
     "Tool.C": 1,
+    "FoundTool.A": 1,
+    "FoundTool.B": 1,
+    "FoundTool.C": 1,
 }
 
 
@@ -1169,8 +1275,7 @@ class FormTester:
 
     async def _status(self, command: str, *values: float) -> bool:
         data = await self._client.call(command, *(Number.of(v) for v in values))
-        (achieved,) = _numeric(_only(data))
-        return achieved != 0.0
+        return _single_number(_only(data)) != 0.0
 
     @call_handle
     async def center_part(self, x: float, y: float, z: float, limit: float) -> bool:
@@ -1227,7 +1332,7 @@ class Mover:
     async def on_move_report(
         self, time: float, dis: float, *axes: str, prioritized: bool = False
     ) -> Transaction:
-        """Start the move-report daemon (6.7.1); reports arrive via ``Transaction.events()``.
+        """Start the move-report daemon (6.10.2); reports arrive via ``Transaction.events()``.
 
         Stop it with ``machine.server.stop_daemon(transaction.tag)``.
         """
@@ -1244,8 +1349,7 @@ class Mover:
 
     @call_handle
     async def is_user_enabled(self) -> bool:
-        payload = _only(await self._client.call(CommandName.IS_USER_ENABLED))
-        return _named_numbers(payload)[CommandName.IS_USER_ENABLED] != 0.0
+        return _single_number(_only(await self._client.call(CommandName.IS_USER_ENABLED))) != 0.0
 
     @call_handle
     async def enumerate_mover_axes(self) -> tuple[str, ...]:

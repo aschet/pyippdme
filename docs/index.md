@@ -152,6 +152,11 @@ An Ack only means the server received the command. A command that then fails
 is reported after the Ack and raises `IppDmeServerError` when you await the
 handle, not from `acknowledged()`.
 
+The standard (5.4.3) does not let a client send a command before the previous one
+was acknowledged. The client therefore sends commands one after another, also when
+you start several at once; commands for prioritized execution (names ending in `E`,
+such as `AbortE()`) go out at once, so that they can get past a running command.
+
 For the raw responses instead of the parsed result, `await call.transaction()`
 gives the `Transaction` of the command that was sent:
 
@@ -160,6 +165,32 @@ call = machine.cart_cmm.pt_meas(x=1, y=2, z=3)
 transaction = await call.transaction()
 raw = await transaction.wait_complete()         # tuple of DataPayload nodes
 ```
+
+## Events from the server
+
+A server can tell the client that something happened without being asked
+(5.5.3): a key pressed on the jog box, a clearance point or a manual point, a tool
+changed or a property set at the machine, a tool collection opened.
+`machine.server.events()` yields them as `KeyPress`, `ClearancePoint`,
+`ManualPoint`, `ToolChanged`, `PropertyChanged` and `ToolCollectionOpened`
+(`pyippdme.client.events`), and anything else as `UnknownEvent`:
+
+```python
+async for event in machine.server.events():
+    if isinstance(event, KeyPress):
+        print(event.key)
+```
+
+A `VirtualCMM` sends them with `key_press()`, `clearance_point()`, `manual_point()`,
+`change_tool()`, `open_tool_collection()` and `set_property()`. A custom
+`IppDmeServer` uses `send_event()` with the builders in `pyippdme.server.builders`.
+
+## Raw data
+
+All three ways to get raw data (file, shared memory, binary socket) deliver the
+scanpoints binary format ESBF of Annex C.2. `pyippdme.rawdata.formats` reads and writes it
+and the older SBF (`unpack_esbf`, `pack_esbf`, `unpack_sbf`, `pack_sbf`), and
+`pyippdme.rawdata.transfer.read_samples` reads the stream of a binary socket.
 
 ## In-process connections
 
@@ -238,6 +269,37 @@ proprietary commands `BUILTIN_COMMANDS` has no way to know about).
 `build_command_catalog(command_classes)` builds the same kind of catalog
 for a custom class subset, e.g. matching a particular
 `IppDmeServer(command_classes=[...])` configuration.
+
+## Deviations and open points
+
+Where this package departs from VDMA 8722:2024-04, or has to guess:
+
+- The server acknowledges every command at once. The standard (5.4.3) lets a server
+  delay the Ack until it can accept more commands.
+- `VirtualCMM` does not require `Home()` before it moves, has no machine volume
+  (error 2500) and no collisions (2504), and never reports 1014.
+  Every measuring tool accepts every measuring and scanning command, so the
+  error 2002 ("Type of probe does not allow this operation") never occurs.
+- Coordinate system transformations are stored and returned, but not applied to
+  coordinates: the transformation chain is defined by Figure 12, a diagram that the
+  text of the standard does not contain.
+- `GetXtdErrStatus()` reports active errors as `ActiveError()` and `Severity()` data
+  lines. Table 15 can also be read as asking for error responses.
+- `GetChangeToolAction()` answers `Argument(Switch),X(0),Y(0),Z(0)`. The standard
+  lists the action as an unnamed value, followed by named ones.
+- `GetRawDataShaMem()` sends offset and size as decimal numbers, although Table 101 calls
+  them "hex coded", and `GetRawDataFile()` sends the URL as a quoted string
+  although Table 103 calls it a name.
+- Values that Tables 66, 70 and 32 call unnamed (`ER`, `Q`, `IJKAct`) are sent named in
+  the response to `PtMeas` and `Get`, because the grammar cannot mix unnamed and
+  named values in one response.
+- `VirtualCMM` reports one machine class, although 6.4.1 allows several.
+- The standard gives no examples for these encodings, so they are guesses: the
+  `pi,pj,pk`, `si,sj,sk` and `R()` items of the `ScanOnCurve` format, the
+  `include`/`exclude` flag of `ROI`, and the `Acqs(..)`, `ROIs(..)`, `QEPs(S(..))` and
+  `GeoElem()` arguments of `FeatureExtract`.
+- The deprecated `FeatureExtraction` class (Annex J.2) is in the client but not
+  simulated.
 
 ## Interactive shell
 

@@ -26,7 +26,8 @@ Implemented so far:
   `IppDmeMachine`, a typed interface organized like the standard's object
   model.
 - Server: `IppDmeServer`, a server you extend with your own command classes
-  and machine backend.
+  and machine backend. It can send the events of the standard on its own, such
+  as a key press on the jog box.
 - Simulation: `VirtualCMM`, a simulated CMM to develop and test clients
   against without hardware. It covers a large part of the standard
   (`Server`, `DME`, `CartCMM`, `TouchTrigger`, `Tool`, `ToolChanger`,
@@ -40,9 +41,8 @@ Implemented so far:
 - CLI and TUI: `ippdme client`, `ippdme serve`, `ippdme spy` and a
   full-screen `ippdme tui`.
 
-Not implemented by the simulation: the deprecated `FeatureExtraction` class,
-a second orthogonal rotary table, and the optional tool-direction and
-rotary-table columns of `ScanOnCurve`.
+Not implemented by the simulation: the deprecated `FeatureExtraction` class.
+The documentation lists where this package deviates from the standard.
 
 ## Installation
 

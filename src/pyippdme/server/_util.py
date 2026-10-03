@@ -10,6 +10,7 @@ directly, and by every :mod:`pyippdme.simulation.classes` handler.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pyippdme.protocol.ast import Argument, BasicName, Items, NamedValue, Number
@@ -74,10 +75,29 @@ def single_basic_name(args: tuple[Argument, ...], cause: str) -> str:
     return args[0].value
 
 
+#: A proprietary property name starts with a two-letter company namespace (6.1), e.g. ``XXMyValue``.
+_PROPRIETARY_NAME_RE = re.compile(r"^[A-Z]{2}[A-Za-z0-9]+(\.|$)")
+
+
+def _require_proprietary(name: str, cause: str) -> None:
+    """Raise ``0505`` unless ``name`` could be a vendor extension (6.1).
+
+    A property the standard does not define must carry a two-letter
+    namespace prefix, so any other unresolved name is simply not a property.
+    """
+    if _PROPRIETARY_NAME_RE.match(name) is None:
+        raise ServerError(
+            ErrorSeverity.CRITICAL,
+            ErrorCode.ARGUMENT_NOT_RECOGNIZED,
+            cause,
+            f"Argument {name} not recognized",
+        )
+
+
 def generic_set_prop(
     ctx: CommandContext[Any], args: tuple[Argument, ...], cause: str = CommandName.SET_PROP
 ) -> HandlerResult:
-    """Apply the fallback ``SetProp`` behaviour: an opaque per-connection property store.
+    """Apply the fallback ``SetProp`` behaviour: a per-connection store for proprietary properties.
 
     Shared by :mod:`pyippdme.server.classes.server_class` (the plain, generic
     ``SetProp``) and :mod:`pyippdme.simulation.classes.tool_class` (which special-cases
@@ -88,6 +108,7 @@ def generic_set_prop(
     for arg in args:
         if not isinstance(arg, NamedValue):
             raise ServerError(ErrorSeverity.CRITICAL, ErrorCode.BAD_PROPERTY, cause, "Bad property")
+        _require_proprietary(arg.name, cause)
         ctx.state.properties[arg.name] = arg.args
     return None
 
@@ -99,13 +120,14 @@ def generic_get_prop(
     for arg in args:
         if not isinstance(arg, NamedValue):
             raise ServerError(ErrorSeverity.CRITICAL, ErrorCode.BAD_PROPERTY, cause, "Bad property")
+        _require_proprietary(arg.name, cause)
         stored = ctx.state.properties.get(arg.name)
         if stored is None:
             raise ServerError(
                 ErrorSeverity.CRITICAL,
-                ErrorCode.BAD_PROPERTY,
+                ErrorCode.ARGUMENT_NOT_SUPPORTED,
                 cause,
-                f"Unknown property {arg.name}",
+                f"Property {arg.name} is not set",
             )
         results.append(NamedValue(arg.name, stored))
     return Items(tuple(results))

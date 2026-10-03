@@ -12,7 +12,7 @@ import contextlib
 from pyippdme.exceptions import IppDmeConnectionError
 from pyippdme.protocol.network import TCP_NETWORK, Network, StreamReaderLike, StreamWriterLike
 
-#: The standard recommends port 1294 for I++ DME clients and servers (5.0).
+#: The standard recommends port 1294 for I++ DME clients and servers (5).
 DEFAULT_PORT = 1294
 
 #: The asyncio stream buffer must be at least as large as
@@ -40,7 +40,13 @@ class LineTransport:
             raise IppDmeConnectionError(f"Could not connect to {host}:{port}: {exc}") from exc
         return cls(reader, writer)
 
-    async def read_line(self) -> str:
+    async def read_line(self, *, lenient: bool = False) -> str:
+        """Read one ``<CR><LF>``-terminated line.
+
+        Non-ASCII bytes close the connection, unless ``lenient`` is set: then
+        they come through as replacement characters, for a server that wants
+        to answer them with the "Illegal character" error (5.1, Annex B).
+        """
         try:
             data = await self._reader.readuntil(b"\r\n")
         except asyncio.IncompleteReadError as exc:
@@ -49,6 +55,8 @@ class LineTransport:
             ) from exc
         except asyncio.LimitOverrunError as exc:
             raise IppDmeConnectionError("Line exceeded the maximum buffer size") from exc
+        if lenient:
+            return data.decode("ascii", errors="replace")
         try:
             return data.decode("ascii")
         except UnicodeDecodeError as exc:

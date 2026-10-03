@@ -64,20 +64,21 @@ such check, since a spiral's target legitimately leaves the plane). Like
 ``GoTo``, both jump straight to the target rather than simulating the
 circular/spiral path itself - there is no real motion to interpolate.
 
-``PtMeas``'s own argument list (6.12.1) also allows ``AlignPart``/
-``Alignment``/``A``/``B`` as arguments, in place of a standalone call - not
-handled here (they're silently ignored, like any other unrecognized named
-argument this module doesn't look up); use the standalone
-:mod:`pyippdme.simulation.classes.rotarytable_class` ``AlignPart`` command
-instead, or :mod:`pyippdme.simulation.classes.tool_class`'s ``AlignTool()``
-for ``A``/``B`` (its module docstring has the full writeup, including why
-its inline-argument form isn't wired in here). ``Get(A())``/``Get(B())``/
-``Get(C())`` *are* handled below, deriving from whatever ``AlignTool()``
-last set via :func:`~pyippdme.simulation.classes.tool_class.tool_angles`.
+``GoTo``/``Step``/``PtMeas`` take everything their tables allow: ``X``/``Y``/``Z``,
+the rotary table ``R``, the tool angles ``Tool.A``/``Tool.B``/``Tool.C``,
+``Tool.Alignment`` (not for ``Step``), ``Sync`` (not for ``PtMeas``) and, for
+``PtMeas``, ``IJK`` and ``AlignPart``. The tool angles and ``Tool.Alignment`` move
+the same orientation ``AlignTool()`` sets (see
+:mod:`pyippdme.simulation.classes.tool_class`), and ``AlignPart`` is the one of
+:mod:`pyippdme.simulation.classes.rotarytable_class`. An argument a command
+does not take is rejected with ``0506``, except a proprietary one. ``Get``
+answers ``Tool.A``/``Tool.B``/``Tool.C`` (and the ``FoundTool`` ones) and ``IJK``,
+the direction of the tool.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -90,14 +91,21 @@ from pyippdme.server import builders
 from pyippdme.server._util import (
     bad_argument,
     check_orthogonal,
+    incorrect_arguments,
     named_number,
     named_vector,
     single_basic_name,
 )
-from pyippdme.server.registry import CommandRegistry, HandlerResult
+from pyippdme.server.registry import CommandRegistry, HandlerResult, PropertyKind
 from pyippdme.server.surface import SampleSurface
 from pyippdme.simulation.classes.mover_class import report_move
-from pyippdme.simulation.classes.tool_class import tool_alignment, tool_angles
+from pyippdme.simulation.classes.rotarytable_class import apply_part_alignment
+from pyippdme.simulation.classes.tool_class import (
+    apply_tool_orientation,
+    require_measuring_tool,
+    tool_alignment_numbers,
+    tool_axis_value,
+)
 from pyippdme.simulation.context import Ctx
 from pyippdme.types.csy import LIVE_TRANSFORM_NAMES, CoordinateTransform
 from pyippdme.types.vec3 import Vec3, add, norm, normalize, scale, sub
@@ -156,15 +164,31 @@ _VALID_CSY = (
 _AXES = ("X", "Y", "Z")
 _DEFAULT_PT_MEAS_REPORT = _AXES
 #: Fields ``OnPtMeasReport()`` (6.12.1's own Table 75) accepts, beyond the
-#: axes ``Get()`` already covers. ``IJK``/``IJKAct`` both report the same
-#: unit probing direction (the given ``IJK``, or 6.12.1's own
-#: motion-vector fallback - see :func:`_pt_meas`); there is no separate
-#: "requested vs. actually used" distinction to report differently, since
-#: this simulation never adjusts the probing direction once determined.
-#: ``Tool.Alignment`` is also listed there but isn't modeled (no tool
-#: alignment state to report) - see TODO.md.
-_PT_MEAS_REPORT_EXTRA_NAMES = ("R", "Q", "ER", "IJK", "IJKAct")
+#: axes ``Get()`` already covers. ``IJK`` is the unit probing direction (the
+#: given ``IJK``, or 6.12.1's own motion-vector fallback - see :func:`_pt_meas`)
+#: and ``IJKAct`` says it is the nominal one (Table 32), since this
+#: simulation never adjusts the probing direction once determined.
+#: ``Tool.Alignment`` and the tool angles report what ``AlignTool()`` set.
+_PT_MEAS_REPORT_EXTRA_NAMES = (
+    "R",
+    "Q",
+    "ER",
+    "IJK",
+    "IJKAct",
+    "Tool.Alignment",
+    "FoundTool.Alignment",
+    "Tool.A",
+    "Tool.B",
+    "Tool.C",
+    "FoundTool.A",
+    "FoundTool.B",
+    "FoundTool.C",
+)
 _PT_MEAS_REPORT_NAMES = (*_AXES, *_PT_MEAS_REPORT_EXTRA_NAMES)
+#: ``IJKAct`` value (Table 32) for "IJK is the nominal vector".
+_IJK_ACT_NOMINAL = 2
+#: A proprietary argument name starts with a two-letter company namespace (6.1).
+_PROPRIETARY_ARGUMENT_RE = re.compile(r"^[A-Z]{2}[A-Za-z0-9]+$")
 
 _READ_TEMPERATURE_SENSOR_PARAMS = (Parameter("Name", DataType.STRING, positional=True),)
 
@@ -218,7 +242,7 @@ _TEMPERATURE_SENSORS = (
     _TemperatureSensor(
         "CMMSensor",
         "CMM",
-        cmm_temp_correction=True,
+        cmm_temp_correction=False,
         scale_axis=None,
         read=lambda _ctx: _DEFAULT_TEMPERATURE,
     ),
@@ -245,7 +269,7 @@ async def _set_coord_system(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResu
     # again, otherwise the zero point of the active coordinate system will
     # be used" - i.e. a coordinate system change clears any explicit origin.
     ctx.state.mover.temperature_compensation_origin.clear()
-    # Mover 6.7.1's own "Server Remarks" under OnMoveReport(): a report is
+    # 6.10.2's own "Server Remarks" under OnMoveReport(): a report is
     # also due after a "virtual movement of the tool", which explicitly
     # includes SetCoordSystem().
     await report_move(ctx)
@@ -254,6 +278,9 @@ async def _set_coord_system(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResu
 
 async def _get_coord_system(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
     return builders.name_value(ctx.state.cart_cmm.active_csy)
+
+
+_TOOL_AXES = ("Tool.A", "Tool.B", "Tool.C", "FoundTool.A", "FoundTool.B", "FoundTool.C")
 
 
 async def _get(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
@@ -276,61 +303,143 @@ async def _get(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
             results.append(
                 NamedValue(ParameterName.R, (Number.of(ctx.state.rotary_table.position),))
             )
-            continue
-        if arg.name in ("A", "B", "C"):
-            # Alignable_AB/Alignable_ABC 6.20.2/6.21.2: unlike RotaryTable's
-            # "R", these have no "1503 Tool not defined" concern (the active
-            # tool always resolves to a real catalog entry) and no "not
-            # alignable" one either (a non-alignable tool just reports the
-            # default orientation's angles, since neither is in A()/B()'s
-            # own error table - see tool_class's module docstring).
-            primary, secondary = tool_alignment(ctx, ctx.state.tool.active_name)
-            a, b, c = tool_angles(primary, secondary)
-            value = {"A": a, "B": b, "C": c}[arg.name]
+        elif arg.name in _TOOL_AXES:
+            # Alignable_AB/Alignable_ABC 6.20.2/6.21.2: "The Property needs to be
+            # prepended by Tool or FoundTool".
+            value = tool_axis_value(ctx, arg.name, CommandName.GET)
             results.append(NamedValue(arg.name, (Number.of(value),)))
-            continue
-        index = _axis_index(arg.name)
-        if index is None:
-            raise ServerError(
-                ErrorSeverity.CRITICAL,
-                ErrorCode.ARGUMENT_NOT_SUPPORTED,
-                CommandName.GET,
-                f"Argument {arg.name} not supported",
-            )
-        results.append(NamedValue(arg.name, (Number.of(ctx.state.cart_cmm.position[index]),)))
+        elif arg.name == ParameterName.IJK:
+            # Table 30: "Current direction vector of the active tool".
+            numbers = tool_alignment_numbers(ctx, CommandName.TOOL, CommandName.GET)
+            results.append(NamedValue(arg.name, tuple(Number.of(c) for c in numbers[:3])))
+        else:
+            index = _axis_index(arg.name)
+            if index is None:
+                raise ServerError(
+                    ErrorSeverity.CRITICAL,
+                    ErrorCode.ARGUMENT_NOT_SUPPORTED,
+                    CommandName.GET,
+                    f"Argument {arg.name} not supported",
+                )
+            results.append(NamedValue(arg.name, (Number.of(ctx.state.cart_cmm.position[index]),)))
     return Items(tuple(results))
 
 
-async def _go_to(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
+@dataclass(frozen=True, slots=True)
+class _Motion:
+    """The parsed arguments of ``GoTo``/``Step``/``PtMeas`` (Tables 59, 60, 76)."""
+
+    x: float | None = None
+    y: float | None = None
+    z: float | None = None
+    r: float | None = None
+    a: float | None = None
+    b: float | None = None
+    c: float | None = None
+    alignment: tuple[float, ...] | None = None
+    align_part: tuple[float, ...] | None = None
+    ijk: Vec3 | None = None
+
+
+def _parse_motion(
+    args: tuple[Argument, ...],
+    cause: str,
+    *,
+    allow_alignment: bool = True,
+    allow_sync: bool = True,
+    allow_pt_meas: bool = False,
+) -> _Motion:
+    """Parse the argument list of a move; raise ``0506`` for anything the command doesn't take."""
+    singles: dict[str, float] = {}
+    vectors: dict[str, tuple[float, ...]] = {}
+    for arg in args:
+        if not isinstance(arg, NamedValue):
+            raise bad_argument(cause, "Expected named arguments")
+        name = arg.name
+        numbers = tuple(a.value for a in arg.args if isinstance(a, Number))
+        if len(numbers) != len(arg.args):
+            raise bad_argument(cause, f"{name} takes numbers only")
+        if name in ("X", "Y", "Z", "R", "Tool.A", "Tool.B", "Tool.C"):
+            if len(numbers) != 1:
+                raise bad_argument(cause, f"Expected {name}(<number>)")
+            singles[name] = numbers[0]
+        elif name == _TOOL_ALIGNMENT_PROPERTY and allow_alignment:
+            vectors[name] = numbers
+        elif name == "Sync" and allow_sync:
+            if len(numbers) != 1 or numbers[0] not in (0.0, 1.0):
+                raise bad_argument(cause, "Expected Sync(0) or Sync(1)")
+        elif allow_pt_meas and name in ("IJK", "AlignPart", "LMN"):
+            vectors[name] = numbers
+        elif _PROPRIETARY_ARGUMENT_RE.match(name) is None:
+            raise ServerError(
+                ErrorSeverity.CRITICAL,
+                ErrorCode.ARGUMENT_NOT_SUPPORTED,
+                cause,
+                f"{name} is not supported"
+                + (
+                    " (Tool.Alignment always defines an absolute orientation, Table 60)"
+                    if name == _TOOL_ALIGNMENT_PROPERTY
+                    else ""
+                ),
+            )
+    ijk = vectors.get("IJK")
+    if ijk is not None and len(ijk) != 3:
+        raise bad_argument(cause, "Expected IJK(<i>,<j>,<k>)")
+    return _Motion(
+        singles.get("X"),
+        singles.get("Y"),
+        singles.get("Z"),
+        singles.get("R"),
+        singles.get("Tool.A"),
+        singles.get("Tool.B"),
+        singles.get("Tool.C"),
+        vectors.get(_TOOL_ALIGNMENT_PROPERTY),
+        vectors.get("AlignPart"),
+        (ijk[0], ijk[1], ijk[2]) if ijk is not None else None,
+    )
+
+
+async def _move(ctx: Ctx, motion: _Motion, cause: str, *, relative: bool) -> None:
+    """Carry out a parsed move: position, rotary table and tool orientation."""
+    locked = ctx.state.form_tester.locked_axes
     # Locked axes (FormTester's LockAxis, 6.6.1) are silently ignored, even
     # when a value is given for them - "without causing an error".
+    apply_tool_orientation(
+        ctx,
+        cause,
+        a=None if "A" in locked else motion.a,
+        b=None if "B" in locked else motion.b,
+        c=None if "C" in locked else motion.c,
+        alignment=motion.alignment,
+        relative=relative,
+    )
+
+    def moved(current: float, axis: str, value: float | None) -> float:
+        if value is None or axis in locked:
+            return current
+        return current + value if relative else value
+
     x, y, z = ctx.state.cart_cmm.position
-    locked = ctx.state.form_tester.locked_axes
-    new_x = None if "X" in locked else named_number(args, "X")
-    new_y = None if "Y" in locked else named_number(args, "Y")
-    new_z = None if "Z" in locked else named_number(args, "Z")
     ctx.state.cart_cmm.position = (
-        x if new_x is None else new_x,
-        y if new_y is None else new_y,
-        z if new_z is None else new_z,
+        moved(x, "X", motion.x),
+        moved(y, "Y", motion.y),
+        moved(z, "Z", motion.z),
     )
     # RotaryTable 6.23.1 R(r): "can only be invoked as an argument of a
     # GoTo, PtMeas or ScanOnCurve command"; the shortest-distance-move and
     # 180-degree-ambiguity rules it describes are a real motion controller's
     # concern, not modeled by this simulation.
-    if "R" not in locked:
-        new_r = named_number(args, "R")
-        if new_r is not None:
-            ctx.state.rotary_table.position = new_r
-    # Mover 6.7.1: GoTo() (and PtMeas(), which calls this) implicitly
-    # executes DisableUser().
+    if motion.r is not None and "R" not in locked:
+        rotary = ctx.state.rotary_table
+        rotary.position = rotary.position + motion.r if relative else motion.r
+    # Mover 6.7.1: GoTo(), Step() and PtMeas() implicitly execute DisableUser().
     ctx.state.mover.user_enabled = False
-    # Mover 6.7.1's OnMoveReport() daemon, if any (see mover_class's module
-    # docstring). For PtMeas() with a SampleSurface configured, this reports
-    # the nominal position reached here, not the later contact/retract
-    # position - "doesn't have to be [timing] accurate" extends to not
-    # re-triggering a second, more precise report for that case either.
+    # Mover 6.10.2's OnMoveReport() daemon, if any (see mover_class's module docstring).
     await report_move(ctx)
+
+
+async def _go_to(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
+    await _move(ctx, _parse_motion(args, CommandName.GO_TO), CommandName.GO_TO, relative=False)
     return None
 
 
@@ -347,13 +456,12 @@ async def _on_pt_meas_report(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerRes
         if arg.name not in _PT_MEAS_REPORT_NAMES:
             # Same convention as Scanning's OnScanReport (see its module
             # docstring): a field this simulation cannot genuinely compute
-            # (e.g. Tool.Alignment - not modeled here) is rejected up
-            # front rather than silently reported as 0.
+            # is rejected up front rather than silently reported as 0.
             raise ServerError(
                 ErrorSeverity.CRITICAL,
-                ErrorCode.ARGUMENT_NOT_SUPPORTED,
+                ErrorCode.BAD_PROPERTY,
                 CommandName.ON_PT_MEAS_REPORT,
-                f"Argument {arg.name} not supported",
+                f"{arg.name} is not allowed in a report",
             )
         names.append(arg.name)
     if not names:
@@ -368,31 +476,10 @@ async def _on_pt_meas_report(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerRes
 
 
 async def _step(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
-    for arg in args:
-        if isinstance(arg, NamedValue) and arg.name == _TOOL_ALIGNMENT_PROPERTY:
-            raise ServerError(
-                ErrorSeverity.CRITICAL,
-                ErrorCode.ARGUMENT_NOT_SUPPORTED,
-                CommandName.STEP,
-                "Tool.Alignment always defines an absolute orientation and cannot be "
-                "used with Step() (Table 60)",
-            )
-    locked = ctx.state.form_tester.locked_axes
-
-    def delta(axis: str) -> float:
-        if axis in locked:
-            return 0.0
-        value = named_number(args, axis)
-        return 0.0 if value is None else value
-
-    x, y, z = ctx.state.cart_cmm.position
-    ctx.state.cart_cmm.position = (x + delta("X"), y + delta("Y"), z + delta("Z"))
-    if "R" not in locked:
-        dr = named_number(args, "R")
-        if dr is not None:
-            ctx.state.rotary_table.position += dr
-    # Mover 6.7.1: Step() implicitly executes DisableUser(), like GoTo().
-    ctx.state.mover.user_enabled = False
+    # Table 60: Tool.Alignment "always defines an absolute orientation" and so
+    # is "Argument not supported" for a relative move (raised by _parse_motion).
+    motion = _parse_motion(args, CommandName.STEP, allow_alignment=False)
+    await _move(ctx, motion, CommandName.STEP, relative=True)
     return None
 
 
@@ -553,11 +640,19 @@ async def _enum_coord_systems(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerR
 
 
 async def _pt_meas(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
+    require_measuring_tool(ctx, CommandName.PT_MEAS)
+    motion = _parse_motion(args, CommandName.PT_MEAS, allow_pt_meas=True)
+    if motion.ijk is not None and motion.x is None and motion.y is None and motion.z is None:
+        # 6.12.1: "The argument IJK(..) without any linear axis coordinates is currently
+        # not allowed."
+        raise incorrect_arguments(CommandName.PT_MEAS, "IJK needs at least one of X, Y and Z")
+    if motion.align_part is not None:
+        apply_part_alignment(ctx, motion.align_part, CommandName.PT_MEAS)
     previous_position = ctx.state.cart_cmm.position
-    await _go_to(ctx, args)
+    await _move(ctx, motion, CommandName.PT_MEAS, relative=False)
     nominal_position = ctx.state.cart_cmm.position
 
-    ijk = named_vector(args, "IJK")
+    ijk = motion.ijk
     direction = ijk if ijk is not None else sub(nominal_position, previous_position)
     try:
         unit_direction = normalize(direction)
@@ -565,7 +660,7 @@ async def _pt_meas(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
         # Degenerate (6.12.1's own fallback has nothing to fall back to
         # either, e.g. the very first PtMeas of a session with no IJK and
         # no prior motion) - report "no direction known" rather than raise,
-        # since IJK/IJKAct are optional report fields, not mandatory ones.
+        # since IJK is an optional report field, not a mandatory one.
         unit_direction = (0.0, 0.0, 0.0)
 
     report_position = nominal_position
@@ -575,21 +670,37 @@ async def _pt_meas(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
             report_position, final_position = probed
             ctx.state.cart_cmm.position = final_position
 
-    report = ctx.state.cart_cmm.pt_meas_report or _DEFAULT_PT_MEAS_REPORT
+    return Items(pt_meas_fields(ctx, report_position, unit_direction, CommandName.PT_MEAS))
+
+
+def pt_meas_fields(
+    ctx: Ctx, position: Vec3, unit_direction: Vec3, cause: str
+) -> tuple[NamedValue, ...]:
+    """Build the fields ``OnPtMeasReport`` asked for, as ``PtMeas`` and the point events send."""
     results: list[NamedValue] = []
-    for name in report:
-        if name in ("IJK", "IJKAct"):
+    for name in ctx.state.cart_cmm.pt_meas_report or _DEFAULT_PT_MEAS_REPORT:
+        if name == ParameterName.IJK:
             results.append(NamedValue(name, tuple(Number.of(c) for c in unit_direction)))
-            continue
-        if name == "R":
-            value = ctx.state.rotary_table.position
-        elif name in ("Q", "ER"):
-            value = 0.0  # no real contact/geometry assessment - see _PT_MEAS_REPORT_NAMES
+        elif name == ParameterName.IJK_ACT:
+            # Table 32: 1 = measured normal, 2 = nominal vector, 3 = tool alignment. The
+            # direction reported is the nominal probing direction.
+            results.append(NamedValue(name, (Number.of(_IJK_ACT_NOMINAL),)))
+        elif name.endswith(".Alignment"):
+            numbers = tool_alignment_numbers(ctx, name.partition(".")[0], cause)
+            results.append(NamedValue(name, tuple(Number.of(c) for c in numbers)))
+        elif name in _TOOL_AXES:
+            value = tool_axis_value(ctx, name, cause)
+            results.append(NamedValue(name, (Number.of(value),)))
         else:
-            index = _axis_index(name)
-            value = report_position[index] if index is not None else 0.0
-        results.append(NamedValue(name, (Number.of(value),)))
-    return Items(tuple(results))
+            if name == "R":
+                value = ctx.state.rotary_table.position
+            elif name in ("Q", "ER"):
+                value = 0.0  # no real contact/geometry assessment - see _PT_MEAS_REPORT_NAMES
+            else:
+                index = _axis_index(name)
+                value = position[index] if index is not None else 0.0
+            results.append(NamedValue(name, (Number.of(value),)))
+    return tuple(results)
 
 
 def _probe_surface(
@@ -698,7 +809,34 @@ async def _read_all_temperatures(ctx: Ctx, _args: tuple[Argument, ...]) -> Handl
     return [builders.temperature_reading(s.name, s.read(ctx)) for s in _TEMPERATURE_SENSORS]
 
 
+def _cart_cmm_children(_ctx: Ctx, reference: str) -> tuple[tuple[str, str], ...] | None:
+    """Answer ``EnumProp`` for ``CartCMM`` (6.5.3) and the classes without properties."""
+    if reference == "CartCMM":
+        return tuple(
+            (name, PropertyKind.PROPERTY) for name in ("ToolChanger", "Tool", "RotaryTable", "Part")
+        )
+    if reference in ("ToolChanger", "RotaryTable"):
+        return ()  # 6.22.2 and 6.23.2: these classes have no properties
+    return None
+
+
+#: Where ``Home()`` leaves the machine: "The home position for a given machine is fixed" (6.4.1).
+HOME_POSITION: Vec3 = (0.0, 0.0, 0.0)
+
+
+def _move_home(ctx: Ctx) -> None:
+    ctx.state.cart_cmm.position = HOME_POSITION
+
+
+def _reset_report_on_start_session(ctx: Ctx) -> None:
+    # 6.3.1 StartSession(): "The default arguments for OnPtMeasReport are set to (X(),Y(),Z())".
+    ctx.state.cart_cmm.pt_meas_report = ()
+
+
 def register(registry: CommandRegistry) -> None:
+    registry.register_session_start_hook(_reset_report_on_start_session)
+    registry.register_property_children(_cart_cmm_children)
+    registry.register_home_hook(_move_home)
     registry.register(
         CommandName.SET_COORD_SYSTEM, _set_coord_system, arguments=_SET_COORD_SYSTEM_PARAMS
     )

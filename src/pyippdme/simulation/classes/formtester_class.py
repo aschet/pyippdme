@@ -131,6 +131,10 @@ async def _lock_axis(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
             ErrorSeverity.ERROR, ErrorCode.UNABLE_TO_MOVE, CommandName.LOCK_AXIS, "Unable to move"
         )
     ctx.state.form_tester.locked_axes = frozenset(locked)
+    # 6.6.1: "All positions are unlocked after a LockAxis with one of the (X(), Y(), Z())
+    # arguments."
+    if locked & _ENFORCED_AXES:
+        ctx.state.form_tester.locked_positions = frozenset()
     return None
 
 

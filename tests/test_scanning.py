@@ -69,20 +69,20 @@ async def test_on_scan_report_accepts_q_as_the_default_shape_includes_it(
 async def test_on_scan_report_rejects_a_field_it_cannot_compute(
     started_client: IppDmeClient,
 ) -> None:
-    """I/J/K (surface-normal direction) look like real fields but aren't simulated.
+    """I/J/K (surface-normal direction) look like real fields but aren't in Table 78.
 
     Silently reporting 0 for them would be indistinguishable from a real
     (but coincidentally zero) measurement - see the module docstring.
     """
     with pytest.raises(IppDmeServerError) as excinfo:
         await started_client.call(CommandName.ON_SCAN_REPORT, NamedValue("I", ()))
-    assert excinfo.value.error.number == "0506"
+    assert excinfo.value.error.number == "0510"
 
 
 async def test_on_scan_report_rejects_an_unknown_name(started_client: IppDmeClient) -> None:
     with pytest.raises(IppDmeServerError) as excinfo:
         await started_client.call(CommandName.ON_SCAN_REPORT, NamedValue("Bogus", ()))
-    assert excinfo.value.error.number == "0506"
+    assert excinfo.value.error.number == "0510"
 
 
 async def test_scan_on_circle_quarter_arc(started_client: IppDmeClient) -> None:
@@ -512,7 +512,7 @@ async def test_scan_on_line_reports_ijk_as_its_own_orientation(
 
 
 async def test_scan_on_curve_reports_each_points_own_ijk(started_client: IppDmeClient) -> None:
-    await started_client.call(CommandName.ON_SCAN_REPORT, NamedValue(ParameterName.IJK_ACT, ()))
+    await started_client.call(CommandName.ON_SCAN_REPORT, NamedValue(ParameterName.IJK, ()))
     data = await started_client.call(
         CommandName.SCAN_ON_CURVE,
         NamedValue(ParameterName.CLOSED, (Number.of(0),)),

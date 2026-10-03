@@ -61,7 +61,7 @@ class ToolState:
     #: ``FindTool`` was never called this session ("otherwise it is
     #: UnDefTool", 6.22.1's ``FoundTool()``).
     found_name: str | None = None
-    #: ISO-8601 UTC timestamp of each tool's last ``ReQualify()`` (6.10.1),
+    #: ISO-8601 UTC timestamp of each tool's last ``ReQualify()`` (6.10.2),
     #: keyed by tool name; unset reads as ``"00000000T000000Z"`` ("never
     #: qualified", ``Tool.LastQualified()``'s own example format, 6.10.3).
     last_qualified: dict[str, str] = field(default_factory=dict)
@@ -101,7 +101,7 @@ class FormTesterState:
 
 @dataclass(frozen=True, slots=True)
 class MoveReportDaemon:
-    """An active ``OnMoveReport``/``OnMoveReportE`` daemon (6.7.1's Table 68)."""
+    """An active ``OnMoveReport``/``OnMoveReportE`` daemon (6.10.2's Table 68)."""
 
     tag: EventTag
     #: Which ``X``/``Y``/``Z``/``R``/``Tool.A``/``Tool.B``/``Tool.C`` fields to report.
@@ -133,6 +133,8 @@ class RotaryTableState:
     #: Position of the rotary table in degrees (``R()``/``R(r)``), read/written
     #: as a fourth axis by ``Get``/``GoTo``/``PtMeas``.
     position: float = 0.0
+    #: Position of the second, orthogonal rotary table, set by ``AlignPart`` (6.23.1).
+    second_position: float = 0.0
     #: Whether rotary-table-CSY calculation is enabled (``EnableRotaryTableVarCsy``).
     var_csy_enabled: bool = False
 
@@ -149,6 +151,8 @@ class RawDataState:
     #: ``RawDataFormat``/``Port`` remembered from the last ``RawDataBinSetup`` (6.17.2.1).
     bin_format: str | None = None
     bin_port: int | None = None
+    #: ``LiveMode`` of the last ``RawDataBinSetup``: points are sent while they are acquired.
+    bin_live: bool = False
     #: Shared-memory segments opened by ``GetRawDataShaMem``, keyed by
     #: ``AcqName``, released by ``ReleaseShaMem`` (6.17.2.2).
     shared_memory_segments: dict[str, SharedMemory] = field(default_factory=dict)
@@ -189,3 +193,23 @@ class SimulationState(MachineState):
     rotary_table: RotaryTableState = field(default_factory=RotaryTableState)
     raw_data: RawDataState = field(default_factory=RawDataState)
     part: PartState = field(default_factory=PartState)
+
+    def carry_over_from(self, previous: MachineState) -> None:
+        """Keep what the machine keeps between clients (6.3.1).
+
+        That is the active tool and its properties, the active coordinate
+        system with its transformations, and where the machine stands.
+        """
+        super().carry_over_from(previous)
+        if not isinstance(previous, SimulationState):
+            return
+        self.tool.active_name = previous.tool.active_name
+        self.tool.parameters = previous.tool.parameters
+        self.tool.last_qualified = previous.tool.last_qualified
+        self.tool.alignment = previous.tool.alignment
+        self.cart_cmm.active_csy = previous.cart_cmm.active_csy
+        self.cart_cmm.position = previous.cart_cmm.position
+        self.cart_cmm.csy_transformations = previous.cart_cmm.csy_transformations
+        self.rotary_table.position = previous.rotary_table.position
+        self.rotary_table.second_position = previous.rotary_table.second_position
+        self.rotary_table.var_csy_enabled = previous.rotary_table.var_csy_enabled

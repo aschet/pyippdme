@@ -175,7 +175,7 @@ async def test_raw_data_namespace_round_trip(machine: IppDmeMachine) -> None:
     await machine.raw_data.data_acquire("Acq2", "SingleShot", "Settings1")
     _name, offset, size = await machine.raw_data.get_raw_data_sha_mem("Acq2")
     assert offset == 0
-    assert size == 24
+    assert size == 512 + 68 + 76 + 24  # ESBF of doubles: header, group, set, one point
     await machine.raw_data.release_sha_mem("Acq2")
 
     await machine.raw_data.data_acquire("Acq3", "SingleShot", "Settings1")
@@ -221,8 +221,13 @@ async def test_server_namespace(machine: IppDmeMachine) -> None:
 
 
 async def test_tool_changer_namespace(machine: IppDmeMachine) -> None:
-    assert set(await machine.tool_changer.enum_tools()) == {"RefTool", "RefTool2", "AlignProbe"}
-    assert await machine.tool_changer.found_tool() == "NoTool"
+    assert set(await machine.tool_changer.enum_tools()) == {
+        "RefTool",
+        "RefTool2",
+        "AlignProbe",
+        "NoTool",
+    }
+    assert await machine.tool_changer.found_tool() == "UnDefTool"
 
     await machine.tool_changer.find_tool("RefTool2")
     assert await machine.tool_changer.found_tool() == "RefTool2"

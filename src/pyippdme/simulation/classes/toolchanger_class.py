@@ -41,8 +41,13 @@ from pyippdme.server import builders
 from pyippdme.server._util import bad_argument
 from pyippdme.server.registry import CommandRegistry, HandlerResult
 from pyippdme.simulation.classes.mover_class import report_move
-from pyippdme.simulation.classes.tool_class import DEFAULT_TOOL_COLLECTION, TOOL_CATALOG
+from pyippdme.simulation.classes.tool_class import (
+    DEFAULT_TOOL_COLLECTION,
+    TOOL_CATALOG,
+    UNDEF_TOOL,
+)
 from pyippdme.simulation.context import Ctx
+from pyippdme.simulation.tool import default_tool_parameters
 from pyippdme.types.vec3 import Vec3, norm, sub
 
 _TOOL_NAME_PARAMS = (Parameter("ToolName", DataType.STRING, positional=True),)
@@ -102,14 +107,25 @@ async def _open_tool_collection(_ctx: Ctx, args: tuple[Argument, ...]) -> Handle
     return None
 
 
+def activate_tool(ctx: Ctx, name: str) -> None:
+    """Make ``name`` the active tool: its parameters start from their defaults (6.10.4)."""
+    ctx.state.tool.active_name = name
+    ctx.state.tool.parameters = default_tool_parameters()
+    # 6.6.1: "All axes are unlocked after a ChangeTool" - and all positions with them.
+    ctx.state.form_tester.locked_axes = frozenset()
+    ctx.state.form_tester.locked_positions = frozenset()
+
+
 async def _change_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     name = _require_tool_name(args, CommandName.CHANGE_TOOL)
     if name not in TOOL_CATALOG:
         raise ServerError(
             ErrorSeverity.ERROR, ErrorCode.TOOL_NOT_FOUND, CommandName.CHANGE_TOOL, "Tool not found"
         )
-    ctx.state.tool.active_name = name
-    # Mover 6.7.1's OnMoveReport() daemon, if any - its own "Server Remarks"
+    activate_tool(ctx, name)
+    # 6.7.1: ChangeTool() implicitly executes DisableUser().
+    ctx.state.mover.user_enabled = False
+    # 6.10.2's OnMoveReport() daemon, if any - its own "Server Remarks"
     # explicitly include ChangeTool() as a "virtual movement" trigger.
     await report_move(ctx)
     return None
@@ -118,7 +134,7 @@ async def _change_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
 async def _find_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     name = _require_tool_name(args, CommandName.FIND_TOOL)
     if name not in TOOL_CATALOG:
-        ctx.state.tool.found_name = "UnDefTool"
+        ctx.state.tool.found_name = UNDEF_TOOL
         raise ServerError(
             ErrorSeverity.ERROR, ErrorCode.TOOL_NOT_FOUND, CommandName.FIND_TOOL, "Tool not found"
         )
@@ -127,7 +143,8 @@ async def _find_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
 
 
 async def _found_tool(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
-    return builders.name_value(ctx.state.tool.found_name or "NoTool")
+    # 6.22.1: "FoundTool() is only valid after a call to FindTool(), otherwise it is UnDefTool".
+    return builders.name_value(ctx.state.tool.found_name or UNDEF_TOOL)
 
 
 async def _set_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
@@ -136,7 +153,7 @@ async def _set_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
         raise ServerError(
             ErrorSeverity.ERROR, ErrorCode.TOOL_NOT_FOUND, CommandName.SET_TOOL, "Tool not found"
         )
-    ctx.state.tool.active_name = name
+    activate_tool(ctx, name)
     return None
 
 

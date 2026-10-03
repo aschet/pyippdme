@@ -8,12 +8,11 @@
 enable state as plain boolean ``MachineState`` fields. Per 6.7.1's own
 "Server Remarks" under ``DisableUser()``, the server calls it implicitly
 whenever the client calls a command that physically moves the machine; this
-project wires that up for every motion command it actually implements
-(``Home``, ``GoTo``/``PtMeas``, and the ``Scanning`` class's
-``ScanOnLine``/``ScanOnCircle``) by setting ``user_enabled = False`` directly
-in those handlers rather than routing through this module. The remaining
-commands on the standard's list (``ChangeTool``, ``AlignTool``, ``A``/``B``/
-``C``) aren't implemented by any class yet, so they can't trigger it.
+project wires that up for every command on the standard's list (``Home``,
+``GoTo``/``GoToOnCircle``/``GoToOnSpiral``/``Step``/``PtMeas``, ``ChangeTool``,
+``AlignTool``, ``Tool.A``/``B``/``C`` and every ``ScanOn...`` command) by
+setting ``user_enabled = False`` directly in those handlers rather than
+routing through this module.
 
 ``EnumerateMoverAxes()`` reports only ``X``/``Y``/``Z``: the axes this
 project's simulated ``CartCMM`` actually moves (see
@@ -31,40 +30,49 @@ this simulation). ``SetTemperatureCompensationOrigin`` is restricted to
 again, otherwise the zero point... will be used"),
 :mod:`pyippdme.simulation.classes.cartcmm_class`'s ``SetCoordSystem`` handler clears it.
 
-``OnMoveReport``/``OnMoveReportE`` (Table 68) start a "daemon" that reports
+``OnMoveReport``/``OnMoveReportE`` (6.10.2, Table 68) start a "daemon" that reports
 requested axes each time the machine moves - :func:`report_move` is the
 seam other modules call into (:mod:`pyippdme.simulation.classes.cartcmm_class`'s
 ``GoTo``/``PtMeas``/``SetCoordSystem``,
 :mod:`pyippdme.simulation.classes.toolchanger_class`'s ``ChangeTool``, per
-6.7.1's own "Server Remarks" list of triggers - not every move-adjacent
+6.10.2's own "Server Remarks" list of triggers - not every move-adjacent
 command has been wired to it, just those). The real command is time/
 distance-triggered ("a report is sent every `Time` seconds" or every `Dis`
 millimeters moved); since every move this simulation performs is
 instantaneous, there is no interval for that to fire within, so `Time`/
 `Dis` are accepted and validated but otherwise unused - one report is sent
-per triggering command instead. Only ``X``/``Y``/``Z``/``R`` are ever
-resolvable (the axes this simulation actually tracks); any other requested
-axis (``Tool.A``/``Tool.B``/``Tool.C``) is silently dropped from the report
-rather than sent as the spec's own "NULL" sentinel, which this library's
-wire model has no representation for. Per 5.5.2, the client itself must
+per triggering command instead. A requested ``Tool.A``/``Tool.B``/``Tool.C``
+that the active tool has no rotation axis for is reported as the standard's
+own ``NULL`` ("If the client requests properties or information which the
+server cannot deliver, such as non-existing orientation axes of a tool, the
+server responds NULL"). Per 5.5.2, the client itself must
 send ``OnMoveReport``/``OnMoveReportE`` tagged with the
 :class:`~pyippdme.protocol.ast.EventTag` its reports should arrive under
 (see :meth:`~pyippdme.client.IppDmeClient.start_daemon`) - a plain numbered
 ``Tag`` is rejected (``0502``). Only one daemon can be active at a time
-(``0515 Daemon exists already`` otherwise, matching 6.7.1's own "Client
+(``0515 Daemon exists already`` otherwise, matching 6.10.2's own "Client
 Remarks": a client must ``StopDaemon()`` before starting a
 differently-configured one anyway).
 """
 
 from __future__ import annotations
 
-from pyippdme.protocol.ast import Argument, DataPayload, EventTag, Items, NamedValue, Number
+from pyippdme.protocol.ast import (
+    Argument,
+    BasicName,
+    DataPayload,
+    EventTag,
+    Items,
+    NamedValue,
+    Number,
+)
 from pyippdme.protocol.commands import CommandName
 from pyippdme.protocol.errors import ErrorCode, ErrorSeverity, ServerError
 from pyippdme.protocol.signature import DataType, Parameter
 from pyippdme.server import builders
 from pyippdme.server._util import named_number
 from pyippdme.server.registry import CommandRegistry, HandlerResult
+from pyippdme.simulation.classes.tool_class import is_alignable_tool, tool_axis_value
 from pyippdme.simulation.context import Ctx
 from pyippdme.simulation.state import MoveReportDaemon
 
@@ -86,6 +94,8 @@ _MOVABLE_AXES = ("X", "Y", "Z")
 #: not tied to whether this simulation physically moves that axis).
 _TEMPERATURE_AXES = frozenset({"X", "Y", "Z", "R", "A", "B", "C"})
 _DEFAULT_SCALE_TEMPERATURE = 20.0
+#: Table 68: the shortest interval between two move reports, in seconds.
+_MIN_REPORT_INTERVAL = 0.1
 
 _ON_MOVE_REPORT_PARAMS = (
     Parameter("Time", DataType.FLOAT),
@@ -233,6 +243,14 @@ async def _on_move_report(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult
             CommandName.ON_MOVE_REPORT,
             "Incorrect arguments",
         )
+    if time_value < _MIN_REPORT_INTERVAL:
+        # Table 68: "Time must be greater or equal 0.1".
+        raise ServerError(
+            ErrorSeverity.CRITICAL,
+            ErrorCode.INCORRECT_ARGUMENTS,
+            CommandName.ON_MOVE_REPORT,
+            "Time must be at least 0.1 seconds",
+        )
     axes: list[str] = []
     for arg in args:
         if not isinstance(arg, NamedValue) or arg.name in ("Time", "Dis"):
@@ -262,7 +280,12 @@ def _report_axis_value(ctx: Ctx, name: str) -> float | None:
     if name in _MOVABLE_AXES:
         index = _MOVABLE_AXES.index(name)
         return ctx.state.cart_cmm.position[index]
-    return None  # Tool.A/Tool.B/Tool.C etc. - not modeled, see module docstring
+    if name in ("Tool.A", "Tool.B", "Tool.C"):
+        # Only an alignable tool has rotation axes, and the catalog's has just A and B.
+        if not is_alignable_tool(ctx.state.tool.active_name) or name == "Tool.C":
+            return None
+        return tool_axis_value(ctx, name, CommandName.ON_MOVE_REPORT)
+    return None  # unknown to this simulation: reported as NULL
 
 
 async def report_move(ctx: Ctx) -> None:
@@ -275,9 +298,9 @@ async def report_move(ctx: Ctx) -> None:
     if daemon is None or ctx.emit_event is None:
         return
     values = tuple(
-        NamedValue(name, (Number.of(value),))
+        NamedValue(name, (Number.of(value) if value is not None else BasicName("NULL"),))
         for name in daemon.axes
-        if (value := _report_axis_value(ctx, name)) is not None
+        for value in (_report_axis_value(ctx, name),)
     )
     payload: DataPayload = Items(values)
     await ctx.emit_event(daemon.tag, payload)

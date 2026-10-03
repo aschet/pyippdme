@@ -46,7 +46,10 @@ async def _get_supported_arguments(ctx: Ctx, args: tuple[Argument, ...]) -> Hand
 
 
 async def _get_machine_class(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
-    return builders.string_value(ctx.state.machine_class)
+    machine_class = ctx.state.machine_class
+    if isinstance(machine_class, str):
+        return builders.string_value(machine_class)
+    return builders.string_list(machine_class)
 
 
 async def _home(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
