@@ -96,6 +96,7 @@ from pyippdme.server._util import (
     named_vector,
     single_basic_name,
 )
+from pyippdme.server.motion import MotionError, MotionRequest
 from pyippdme.server.registry import CommandRegistry, HandlerResult, PropertyKind
 from pyippdme.server.surface import SampleSurface
 from pyippdme.simulation.classes.mover_class import report_move
@@ -420,18 +421,33 @@ async def _move(ctx: Ctx, motion: _Motion, cause: str, *, relative: bool) -> Non
         return current + value if relative else value
 
     x, y, z = ctx.state.cart_cmm.position
-    ctx.state.cart_cmm.position = (
-        moved(x, "X", motion.x),
-        moved(y, "Y", motion.y),
-        moved(z, "Z", motion.z),
-    )
+    target = (moved(x, "X", motion.x), moved(y, "Y", motion.y), moved(z, "Z", motion.z))
+    rotary = ctx.state.rotary_table
+    rotary_target = rotary.position
+    if motion.r is not None and "R" not in locked:
+        rotary_target = rotary.position + motion.r if relative else motion.r
+    if ctx.motion is not None:
+        request = MotionRequest(
+            cause=cause,
+            start=(x, y, z),
+            end=target,
+            rotary_start=rotary.position,
+            rotary_end=rotary_target,
+            homed=ctx.state.homed,
+            tool_name=ctx.state.tool.active_name,
+            cancel=ctx.cancel,
+        )
+        try:
+            target = await ctx.motion.travel(request)
+        except MotionError as error:
+            ctx.state.cart_cmm.position = error.stopped_at
+            raise
+    ctx.state.cart_cmm.position = target
     # RotaryTable 6.23.1 R(r): "can only be invoked as an argument of a
     # GoTo, PtMeas or ScanOnCurve command"; the shortest-distance-move and
     # 180-degree-ambiguity rules it describes are a real motion controller's
     # concern, not modeled by this simulation.
-    if motion.r is not None and "R" not in locked:
-        rotary = ctx.state.rotary_table
-        rotary.position = rotary.position + motion.r if relative else motion.r
+    rotary.position = rotary_target
     # Mover 6.7.1: GoTo(), Step() and PtMeas() implicitly execute DisableUser().
     ctx.state.mover.user_enabled = False
     # Mover 6.10.2's OnMoveReport() daemon, if any (see mover_class's module docstring).

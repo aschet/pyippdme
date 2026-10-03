@@ -40,8 +40,9 @@ from pyippdme.server import IppDmeServer
 from pyippdme.server import builders as server_builders
 from pyippdme.server._util import generic_set_prop
 from pyippdme.server.backend import MachineBackend
+from pyippdme.server.motion import MotionModel
 from pyippdme.server.registry import CommandContext, CommandRegistry, component_name
-from pyippdme.server.surface import SampleSurface
+from pyippdme.server.surface import RawSensor, SampleSurface
 from pyippdme.simulation import DEFAULT_COMMAND_CLASSES
 from pyippdme.simulation.backend import SimulatedBackend
 from pyippdme.simulation.classes.cartcmm_class import pt_meas_fields
@@ -125,6 +126,8 @@ class VirtualCMM(IppDmeServer[SimulationState]):
         command_classes: Sequence[Callable[[CommandRegistry], None]] = DEFAULT_COMMAND_CLASSES,
         network: Network = TCP_NETWORK,
         sample_surface: SampleSurface | None = None,
+        raw_sensor: RawSensor | None = None,
+        motion: MotionModel | None = None,
         on_line_received: LineHook | None = None,
         on_line_sent: LineHook | None = None,
         on_connect: Callable[[str], None] | None = None,
@@ -142,6 +145,8 @@ class VirtualCMM(IppDmeServer[SimulationState]):
             state_factory=SimulationState,
             network=network,
             sample_surface=sample_surface,
+            raw_sensor=raw_sensor,
+            motion=motion,
             on_line_received=on_line_received,
             on_line_sent=on_line_sent,
             on_connect=on_connect,
@@ -159,6 +164,8 @@ class VirtualCMM(IppDmeServer[SimulationState]):
             csy_store=self.csy_store,
             cancel=asyncio.Event(),
             sample_surface=self.sample_surface,
+            raw_sensor=self.raw_sensor,
+            motion=self.motion,
             network=self.network,
         )
 

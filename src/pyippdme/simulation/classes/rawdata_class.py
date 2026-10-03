@@ -178,12 +178,18 @@ async def _data_acquire(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
             positions.append((numbers[base], numbers[base + 1], numbers[base + 2]))
             directions.append((numbers[base + 3], numbers[base + 4], numbers[base + 5]))
 
-    point_set = PointSet(
-        normal=(0.0, 0.0, 1.0),
-        direction=directions[0],
-        points=_synthesize_measurement_points(acq_name, acquisition_type, positions),
+    acquired = (
+        ctx.raw_sensor.acquire(acq_name, acquisition_type, positions, directions)
+        if ctx.raw_sensor is not None
+        else None
     )
-    acquired = PointCloudSet((PointCloud((point_set,)),))
+    if acquired is None:
+        point_set = PointSet(
+            normal=(0.0, 0.0, 1.0),
+            direction=directions[0],
+            points=_synthesize_measurement_points(acq_name, acquisition_type, positions),
+        )
+        acquired = PointCloudSet((PointCloud((point_set,)),))
     raw_data = ctx.state.raw_data
     if raw_data.bin_live and raw_data.bin_format is not None and raw_data.bin_port is not None:
         # 6.15.1: "The result of the acquisition command will be stored under a distinct

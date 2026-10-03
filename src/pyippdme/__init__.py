@@ -32,7 +32,7 @@ from pyippdme.server.registry import (
     component_name,
     register_subset,
 )
-from pyippdme.server.surface import SampleSurface
+from pyippdme.server.surface import RawSensor, SampleSurface
 from pyippdme.simulation import DEFAULT_COMMAND_CLASSES
 from pyippdme.simulation.surface import CylinderSurface, PlaneSurface, SphereSurface
 from pyippdme.simulation.virtual_cmm import VirtualCMM
@@ -62,6 +62,7 @@ __all__ = [
     "Network",
     "ParameterName",
     "PlaneSurface",
+    "RawSensor",
     "SampleSurface",
     "ServerError",
     "SphereSurface",

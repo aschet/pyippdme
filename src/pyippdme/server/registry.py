@@ -44,7 +44,8 @@ from pyippdme.protocol.namespace import proprietary_name
 from pyippdme.protocol.network import TCP_NETWORK, Network
 from pyippdme.protocol.signature import Parameter
 from pyippdme.server.backend import CancellationToken, MachineBackend
-from pyippdme.server.surface import SampleSurface
+from pyippdme.server.motion import MotionModel
+from pyippdme.server.surface import RawSensor, SampleSurface
 from pyippdme.types.csy import CsyStore
 
 HandlerResult: TypeAlias = DataPayload | Sequence[DataPayload] | AsyncIterator[DataPayload] | None
@@ -166,6 +167,12 @@ class CommandContext(Generic[StateT]):
     #: ``PtMeas`` reporting the commanded position exactly, as if nothing
     #: were ever really touched.
     sample_surface: SampleSurface | None = None
+    #: The simulated optical sensor ``DataAcquire`` uses, if any; see
+    #: :class:`~pyippdme.server.surface.RawSensor`.
+    raw_sensor: RawSensor | None = None
+    #: What carries out a move (time, limits, collisions); see
+    #: :class:`~pyippdme.server.motion.MotionModel`. ``None``: moves are instant.
+    motion: MotionModel | None = None
     #: Where a handler that has to open its own connection or listener (the
     #: raw-data binary socket, 6.17.2.1) gets it from; the server's own
     #: :class:`~pyippdme.protocol.network.Network`.
