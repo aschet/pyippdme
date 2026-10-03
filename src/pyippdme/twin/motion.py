@@ -2,50 +2,25 @@
 #
 # SPDX-License-Identifier: MPL-2.0
 
-"""Timed motion with machine limits and collisions for the twin."""
+"""Timed motion with machine limits, safety and collisions for the twin."""
 
 from __future__ import annotations
 
 import asyncio
-import math
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from pyippdme.protocol.errors import ErrorCode, ErrorSeverity, ServerError
-from pyippdme.server.motion import MotionError, MotionRequest
-from pyippdme.types.vec3 import Vec3, add, norm, scale, sub
+from pyippdme.server.motion import MotionError, MotionRequest, ProbeRequest, ProbeResult
+from pyippdme.twin.planning import travel_time, travelled  # noqa: F401 (re-exported)
+from pyippdme.types.csy import CsyContext
+from pyippdme.types.vec3 import Vec3
 
 if TYPE_CHECKING:
     from pyippdme.twin.twin import DigitalTwin
 
-#: Hold-off so a stopped machine is not left touching what it hit (mm).
-_BACKOFF = 0.5
-_FRAME = 1.0 / 60.0
 _EPS = 1e-6
-
-
-def travel_time(distance: float, vmax: float, accel: float) -> float:
-    """Duration of a trapezoidal (or triangular) velocity profile over ``distance``."""
-    if distance <= 0.0:
-        return 0.0
-    ramp = vmax * vmax / accel
-    if distance >= ramp:
-        return distance / vmax + vmax / accel
-    return 2.0 * math.sqrt(distance / accel)
-
-
-def travelled(t: float, distance: float, vmax: float, accel: float) -> float:
-    """Distance covered ``t`` seconds into the profile of :func:`travel_time`."""
-    total = travel_time(distance, vmax, accel)
-    if t >= total:
-        return distance
-    t_acc = min(vmax / accel, total / 2.0)
-    v_peak = accel * t_acc
-    if t < t_acc:
-        return 0.5 * accel * t * t
-    if t > total - t_acc:
-        rest = total - t
-        return distance - 0.5 * accel * rest * rest
-    return 0.5 * accel * t_acc * t_acc + v_peak * (t - t_acc)
+_PROBING = ("PtMeas", "PtMeasSelfCenter", "PtMeasSelfCenterLocked")
 
 
 class TwinMotion:
@@ -54,10 +29,51 @@ class TwinMotion:
     def __init__(self, twin: DigitalTwin) -> None:
         self._twin = twin
 
+    def csy_context(self) -> CsyContext:
+        return self._twin.csy_context()
+
+    async def home(self, cancel: asyncio.Event) -> Vec3:
+        await self._twin.run_home(cancel)
+        return self._twin.to_client((0.0, 0.0, 0.0))
+
     async def travel(self, request: MotionRequest) -> Vec3:
+        """Carry out a move given in the client's coordinate system; returns where it ended there."""
+        twin = self._twin
+        context = twin.csy_context()
+        machine = replace(
+            request,
+            start=twin.to_machine(request.start, context),
+            end=twin.to_machine(request.end, context),
+        )
+        try:
+            return twin.to_client(await self._travel(machine), context)
+        except MotionError as error:
+            raise twin.client_error(error, context) from None
+
+    async def probe(self, request: ProbeRequest) -> ProbeResult:
+        """The probing cycle for a request in the client's coordinate system."""
+        twin = self._twin
+        context = twin.csy_context()
+        state = twin.state
+        start = twin.to_machine(state.cart_cmm.position, context) if state else twin.position
+        machine = replace(
+            request,
+            nominal=twin.to_machine(request.nominal, context),
+            direction=twin.to_machine_direction(request.direction, context),
+        )
+        try:
+            result = await twin.run_probe(machine, start)
+        except MotionError as error:
+            raise twin.client_error(error, context) from None
+        return ProbeResult(
+            twin.to_client(result.contact, context), twin.to_client(result.rest, context)
+        )
+
+    async def _travel(self, request: MotionRequest) -> Vec3:
         twin = self._twin
         spec = twin.machine.spec
         cause = request.cause
+        twin.check_ready(cause)
         if spec.require_home and not request.homed:
             raise ServerError(
                 ErrorSeverity.CRITICAL,
@@ -73,41 +89,33 @@ class TwinMotion:
                     cause,
                     f"{axis}={value:g} is outside the machine volume 0..{limit:g}",
                 )
-        probing = cause in ("PtMeas", "PtMeasSelfCenter", "PtMeasSelfCenterLocked")
-        stop_at, hit = twin.first_collision(request, probing=probing)
+        stop_at, hit = twin.first_collision(request, probing=False)
         end = stop_at if hit is not None else request.end
         rotary_end = request.rotary_end if hit is None else request.rotary_start
 
-        distance = norm(sub(end, request.start))
-        rotary_distance = abs(rotary_end - request.rotary_start)
-        vmax = spec.max_speed * twin.speed_override
-        duration = max(
-            travel_time(distance, vmax, spec.acceleration),
-            travel_time(rotary_distance, spec.rotary_speed, spec.rotary_speed * 4.0),
+        params = twin.protocol_parameters()
+        speed = max(params["go_speed"] * twin.speed_override, 1e-3)
+        exit_speed = 0.0
+        if cause in _PROBING and hit is None:
+            # Figure 29: the machine slows down to the probing speed at the approach point and
+            # carries on, it does not stop there.
+            tool = twin.toolkit.spec(request.tool_name)
+            exit_speed = min(tool.touch_speed or params["probe_speed"], speed)
+        position = await twin.run_leg(
+            request.start,
+            end,
+            speed,
+            params["go_accel"],
+            request.cancel,
+            (request.rotary_start, rotary_end),
+            cause,
+            v_end=exit_speed,
         )
-        position = request.start
-        if twin.time_scale > 0.0 and duration > 0.0:
-            loop = asyncio.get_running_loop()
-            started = loop.time()
-            while not request.cancel.is_set():
-                t = (loop.time() - started) * twin.time_scale
-                if t >= duration:
-                    break
-                fraction = t / duration
-                along = (
-                    travelled(t, distance, vmax, spec.acceleration) / distance if distance else 0.0
-                )
-                position = add(request.start, scale(sub(end, request.start), min(along, 1.0)))
-                rotary = request.rotary_start + (rotary_end - request.rotary_start) * fraction
-                twin.publish_motion(position, rotary)
-                await asyncio.sleep(_FRAME)
-            if request.cancel.is_set():
-                twin.publish_motion(position, request.rotary_start)
-                return position
-        twin.publish_motion(end, rotary_end)
+        if request.cancel.is_set():
+            return position
         if hit is not None:
             twin.report_collision(hit, end)
             raise MotionError(
                 ErrorSeverity.CRITICAL, ErrorCode.COLLISION, cause, f"Collision with {hit}", end
             )
-        return end
+        return position

@@ -9,13 +9,16 @@ from __future__ import annotations
 import itertools
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from pyippdme.twin import cad, geometry
 from pyippdme.twin.geometry import Matrix, Mesh
-from pyippdme.twin.spec import ToolSpec
 from pyippdme.types.vec3 import Vec3
+
+if TYPE_CHECKING:
+    from pyippdme.twin.artifact import ArtifactData
 
 _ids = itertools.count(1)
 
@@ -37,8 +40,12 @@ class SceneObject:
     color: tuple[float, float, float] = (0.35, 0.65, 0.85)
     visible: bool = True
     source: str = ""
+    #: Nominal features and measurement plans, for check artefacts (``twin.artifact``).
+    artifact: ArtifactData | None = None
     id: int = field(default_factory=lambda: next(_ids))
     _caster: cad.RayCaster | None = field(default=None, repr=False)
+    _bounds: tuple[Vec3, Vec3] | None = field(default=None, repr=False)
+    _fine: Mesh | None = field(default=None, repr=False)
 
     @classmethod
     def from_shape(
@@ -64,11 +71,20 @@ class SceneObject:
             self._caster = cad.RayCaster(self.shape)
         return self._caster
 
+    @property
+    def fine_mesh(self) -> Mesh:
+        """A mesh fine enough for optical sensors (some 10 micrometres of sag), built on demand."""
+        if self._fine is None:
+            self._fine = cad.tessellate(self.shape, deflection=0.02, angular=0.1)
+        return self._fine
+
     def world_pose(self, rotary: Matrix) -> Matrix:
         return rotary @ self.pose if self.on_rotary else self.pose
 
     def local_bounds(self) -> tuple[Vec3, Vec3]:
-        return cad.bounding_box(self.shape)
+        if self._bounds is None:
+            self._bounds = cad.bounding_box(self.shape)
+        return self._bounds
 
     def world_bounds(self, rotary: Matrix) -> tuple[np.ndarray, np.ndarray]:
         lo, hi = self.local_bounds()
@@ -107,53 +123,3 @@ def demo_sample() -> SceneObject:
     boss = cad.make_cylinder(5.0, 12.0, (65.0, 15.0, 30.0))
     shape = cad.fuse(cad.cut(block, bore), boss)
     return SceneObject.from_shape("Demo block", "sample", shape, source="builtin")
-
-
-class ToolShapes:
-    """The stylus of a tool as B-rep, built once along +Z from the TCP and placed per query."""
-
-    def __init__(self) -> None:
-        self._cache: dict[ToolSpec, tuple[cad.Shape, cad.Shape]] = {}
-
-    def _build(self, spec: ToolSpec) -> tuple[cad.Shape, cad.Shape]:
-        stem_and_holder = cad.make_compound(
-            [
-                *(
-                    [cad.make_cylinder(spec.stem_radius, spec.stem_length)]
-                    if spec.stem_length > 0 and spec.stem_radius > 0
-                    else []
-                ),
-                cad.make_cylinder(
-                    spec.holder_radius, spec.holder_length, (0.0, 0.0, spec.stem_length)
-                ),
-            ]
-        )
-        if spec.ball_radius > 0:
-            full = cad.make_compound([stem_and_holder, cad.make_sphere(spec.ball_radius)])
-        else:
-            full = stem_and_holder
-        return full, stem_and_holder
-
-    def shape(self, spec: ToolSpec, tcp: Vec3, axis: Vec3, *, with_ball: bool = True) -> cad.Shape:
-        full, no_ball = self._cache.setdefault(spec, self._build(spec))
-        return cad.moved(full if with_ball else no_ball, tool_pose(tcp, axis))
-
-    def mesh(self, spec: ToolSpec) -> Mesh:
-        return cad.tessellate(self._cache.setdefault(spec, self._build(spec))[0])
-
-
-def tool_pose(tcp: Vec3, axis: Vec3) -> Matrix:
-    """Pose that puts a +Z stylus at ``tcp``, its stem running along ``axis`` (towards the head)."""
-    a = np.asarray(axis, dtype=float)
-    n = float(np.linalg.norm(a))
-    a = np.array([0.0, 0.0, 1.0]) if n == 0 else a / n
-    z = np.array([0.0, 0.0, 1.0])
-    v = np.cross(z, a)
-    s = float(np.linalg.norm(v))
-    m = np.eye(4)
-    if s > 1e-12:
-        m = geometry.rotation(tuple(v / s), float(np.degrees(np.arctan2(s, float(z @ a)))))
-    elif a[2] < 0:
-        m = geometry.rotation((1.0, 0.0, 0.0), 180.0)
-    m[:3, 3] = tcp
-    return m

@@ -69,7 +69,7 @@ async def test_pt_meas_touches_the_cad_surface(
     top = twin.machine.spec.table_top_z + 30.0  # the block is 30 mm high, boss excluded
     x, y = float(lo[0] + 10), float(lo[1] + 10)  # on the plain top face, away from bore and boss
     await machine.cart_cmm.go_to(x=x, y=y, z=top + 30)
-    report = await machine.cart_cmm.pt_meas(x=x, y=y, z=top, ijk=(0, 0, -1))
+    report = await machine.cart_cmm.pt_meas(x=x, y=y, z=top, ijk=(0, 0, 1))
     assert report.number("Z") == pytest.approx(top, abs=1e-6)
     assert len(twin.contacts) == 1
 
@@ -86,7 +86,7 @@ async def test_noise_follows_the_machine_accuracy(
     zs = []
     for _ in range(20):
         await machine.cart_cmm.go_to(x=x, y=y, z=top + 30)
-        zs.append((await machine.cart_cmm.pt_meas(x=x, y=y, z=top, ijk=(0, 0, -1))).number("Z"))
+        zs.append((await machine.cart_cmm.pt_meas(x=x, y=y, z=top, ijk=(0, 0, 1))).number("Z"))
     spread = max(zs) - min(zs)
     assert 0.0 < spread < 0.02  # micrometres, within the MPE of the machine
 
@@ -119,7 +119,7 @@ async def test_line_scanner_returns_a_point_cloud_of_the_sample(
         (float(lo[0]), float((lo[1] + hi[1]) / 2), z),
         (float(hi[0]), float((lo[1] + hi[1]) / 2), z),
     ]
-    cloud = twin.scanner.acquire("a", "Sweep", positions, [(0.0, 0.0, -1.0)] * 2)
+    cloud = twin.scanner.acquire("a", "Sweep", positions, [(0.0, 0.0, 1.0)] * 2)
     assert cloud is not None
     points = cloud.point_clouds[0].point_sets[0].points
     assert len(points) > 500
@@ -186,3 +186,59 @@ async def test_scan_on_line_follows_the_cad_surface(
     ]
     assert len(points) >= 7
     assert all(abs(p[2] - top) < 0.05 for p in points)  # snapped onto the surface, not the path
+
+
+async def test_unknown_contour_scan_follows_the_cad_part_to_the_end_plane(
+    twin_machine: tuple[DigitalTwin, IppDmeMachine],
+) -> None:
+    twin, machine = twin_machine
+    await machine.dme.home()
+    lo, _ = twin.objects[0].world_bounds(twin.machine.rotary_pose(0.0))
+    top = twin.machine.spec.table_top_z + 30.0
+    x0, y = float(lo[0]), float(lo[1]) + 45.0
+    start = (x0 + 5.0, y, top)
+    points = [
+        p
+        async for p in machine.scanning.scan_in_plane_end_is_plane(
+            start,
+            (0, 0, 1),
+            (0, 1, 0),
+            (x0 + 20.0, y, top),
+            4.0,
+            (x0 + 60.0, y, top),
+            (1, 0, 0),
+            1,
+            (0, 0, 1),
+        )
+    ]
+    assert 13 <= len(points) <= 16
+    assert all(abs(p[2] - top) < 0.05 and abs(p[1] - y) < 0.05 for p in points)
+    assert points[-1][0] >= x0 + 60.0 - 0.1
+    xs = [p[0] for p in points]
+    assert xs == sorted(xs)
+
+
+async def test_unknown_contour_scan_ends_in_a_sphere(
+    twin_machine: tuple[DigitalTwin, IppDmeMachine],
+) -> None:
+    twin, machine = twin_machine
+    await machine.dme.home()
+    lo, _ = twin.objects[0].world_bounds(twin.machine.rotary_pose(0.0))
+    top = twin.machine.spec.table_top_z + 30.0
+    x0, y = float(lo[0]), float(lo[1]) + 45.0
+    points = [
+        p
+        async for p in machine.scanning.scan_in_plane_end_is_sphere(
+            (x0 + 5.0, y, top),
+            (0, 0, 1),
+            (0, 1, 0),
+            (x0 + 20.0, y, top),
+            4.0,
+            (x0 + 50.0, y, top),
+            6.0,
+            1,
+            (0, 0, 1),
+        )
+    ]
+    assert points
+    assert abs(points[-1][0] - (x0 + 50.0)) <= 3.0

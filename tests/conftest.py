@@ -4,12 +4,13 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 
 from pyippdme import IppDmeClient, VirtualCMM
 from pyippdme.protocol.network import MemoryNetwork
+from pyippdme.simulation.classes.tool_class import reset_registered_tools
 from pyippdme.types.csy import InMemoryCsyStore
 
 
@@ -66,3 +67,10 @@ async def tcp_server() -> AsyncIterator[VirtualCMM]:
 def tcp_server_port(tcp_server: VirtualCMM) -> int:
     assert tcp_server.port is not None
     return tcp_server.port
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_tools() -> Iterator[None]:
+    """The tool catalog is process-wide: no test may leave tools behind for the next."""
+    yield
+    reset_registered_tools()

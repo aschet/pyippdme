@@ -67,7 +67,7 @@ from pyippdme.protocol.network import (
 )
 from pyippdme.protocol.transport import DEFAULT_PORT, READ_LIMIT, LineTransport
 from pyippdme.server.backend import CancellationToken, MachineBackend
-from pyippdme.server.motion import MotionModel
+from pyippdme.server.motion import MotionModel, ToolHandler
 from pyippdme.server.registry import (
     DEFAULT_MACHINE_CLASS,
     CommandContext,
@@ -142,6 +142,7 @@ class _ServerConnection(Generic[StateT]):
         sample_surface: SampleSurface | None = None,
         raw_sensor: RawSensor | None = None,
         motion: MotionModel | None = None,
+        tool_handler: ToolHandler | None = None,
         on_line_received: LineHook | None = None,
         on_line_sent: LineHook | None = None,
         previous_state: StateT | None = None,
@@ -154,6 +155,7 @@ class _ServerConnection(Generic[StateT]):
         self._sample_surface = sample_surface
         self._raw_sensor = raw_sensor
         self._motion = motion
+        self._tool_handler = tool_handler
         self._on_line_received = on_line_received
         self._on_line_sent = on_line_sent
         self.state = state_factory()
@@ -336,6 +338,7 @@ class _ServerConnection(Generic[StateT]):
             sample_surface=self._sample_surface,
             raw_sensor=self._raw_sensor,
             motion=self._motion,
+            tool_handler=self._tool_handler,
             network=self._network,
             emit_event=self._emit_event,
         )
@@ -542,6 +545,7 @@ class IppDmeServer(Generic[StateT]):
         sample_surface: SampleSurface | None = None,
         raw_sensor: RawSensor | None = None,
         motion: MotionModel | None = None,
+        tool_handler: ToolHandler | None = None,
         on_line_received: LineHook | None = None,
         on_line_sent: LineHook | None = None,
         on_connect: Callable[[str], None] | None = None,
@@ -567,6 +571,8 @@ class IppDmeServer(Generic[StateT]):
         self.raw_sensor = raw_sensor
         #: What carries out a move; see :class:`~pyippdme.server.motion.MotionModel`.
         self.motion = motion
+        #: Tool change and qualification; see :class:`~pyippdme.server.motion.ToolHandler`.
+        self.tool_handler = tool_handler
         #: Observe-only wire-line hooks (see :mod:`pyippdme.protocol.hooks`),
         #: named from this server's own point of view: ``on_line_received``
         #: fires for a line a client sent it (a command), ``on_line_sent``
@@ -654,6 +660,7 @@ class IppDmeServer(Generic[StateT]):
             self.sample_surface,
             self.raw_sensor,
             self.motion,
+            self.tool_handler,
             self.on_line_received,
             self.on_line_sent,
             self._last_state,

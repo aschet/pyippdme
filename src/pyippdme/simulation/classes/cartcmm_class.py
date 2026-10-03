@@ -96,7 +96,7 @@ from pyippdme.server._util import (
     named_vector,
     single_basic_name,
 )
-from pyippdme.server.motion import MotionError, MotionRequest
+from pyippdme.server.motion import MotionError, MotionRequest, ProbeRequest
 from pyippdme.server.registry import CommandRegistry, HandlerResult, PropertyKind
 from pyippdme.server.surface import SampleSurface
 from pyippdme.simulation.classes.mover_class import report_move
@@ -107,8 +107,8 @@ from pyippdme.simulation.classes.tool_class import (
     tool_alignment_numbers,
     tool_axis_value,
 )
-from pyippdme.simulation.context import Ctx
-from pyippdme.types.csy import LIVE_TRANSFORM_NAMES, CoordinateTransform
+from pyippdme.simulation.context import Ctx, csy_context
+from pyippdme.types.csy import CSY_CHAIN, LIVE_TRANSFORM_NAMES, CoordinateTransform, CsyContext
 from pyippdme.types.vec3 import Vec3, add, norm, normalize, scale, sub
 
 _SET_COORD_SYSTEM_PARAMS = (Parameter("Csy", DataType.NAME, positional=True),)
@@ -154,13 +154,8 @@ _NAME_PARAMS = (Parameter("Name", DataType.STRING, positional=True),)
 
 #: The CSY that SaveActiveCoordSystem()/LoadCoordSystem() (6.5.2) save/restore.
 _PART_CSY = "PartCsy"
-_VALID_CSY = (
-    "MachineCsy",
-    "MoveableMachineCsy",
-    "MultipleArmCsy",
-    "RotaryTableVarCsy",
-    _PART_CSY,
-)
+#: ``SetCoordSystem`` (6.5.2) chooses where a client enters the transformation chain of Figure 12.
+_VALID_CSY = CSY_CHAIN
 
 _AXES = ("X", "Y", "Z")
 _DEFAULT_PT_MEAS_REPORT = _AXES
@@ -255,6 +250,17 @@ def _axis_index(name: str) -> int | None:
     return _AXES.index(name) if name in _AXES else None
 
 
+def _keep_position(ctx: Ctx, before: CsyContext) -> None:
+    """Re-express the stored position after the coordinate system or its placement changed.
+
+    The machine does not move when a client activates another coordinate system or moves one;
+    only the numbers that describe where it stands change (6.5.2).
+    """
+    after = csy_context(ctx)
+    position = ctx.state.cart_cmm.position
+    ctx.state.cart_cmm.position = after.to_client(before.to_machine(position))
+
+
 async def _set_coord_system(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     name = single_basic_name(args, CommandName.SET_COORD_SYSTEM)
     if name not in _VALID_CSY:
@@ -264,7 +270,9 @@ async def _set_coord_system(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResu
             CommandName.SET_COORD_SYSTEM,
             f"Unknown coordinate system {name}",
         )
+    before = csy_context(ctx)
     ctx.state.cart_cmm.active_csy = name
+    _keep_position(ctx, before)
     # Mover 6.7.1 SetTemperatureCompensationOrigin's Client Remarks: "After
     # changing the active coordinate system... the origin has to be set
     # again, otherwise the zero point of the active coordinate system will
@@ -400,8 +408,36 @@ def _parse_motion(
     )
 
 
-async def _move(ctx: Ctx, motion: _Motion, cause: str, *, relative: bool) -> None:
-    """Carry out a parsed move: position, rotary table and tool orientation."""
+def _targets(ctx: Ctx, motion: _Motion, *, relative: bool) -> tuple[Vec3, float]:
+    """Where a parsed move ends: the linear position and the rotary table angle."""
+    locked = ctx.state.form_tester.locked_axes
+
+    def moved(current: float, axis: str, value: float | None) -> float:
+        if value is None or axis in locked:
+            return current
+        return current + value if relative else value
+
+    x, y, z = ctx.state.cart_cmm.position
+    target = (moved(x, "X", motion.x), moved(y, "Y", motion.y), moved(z, "Z", motion.z))
+    rotary = ctx.state.rotary_table.position
+    rotary_target = rotary
+    if motion.r is not None and "R" not in locked:
+        rotary_target = rotary + motion.r if relative else motion.r
+    return target, rotary_target
+
+
+async def _move(
+    ctx: Ctx,
+    motion: _Motion,
+    cause: str,
+    *,
+    relative: bool,
+    end_offset: Vec3 = (0.0, 0.0, 0.0),
+) -> None:
+    """Carry out a parsed move: position, rotary table and tool orientation.
+
+    ``end_offset`` shifts the end of the linear move (``PtMeas`` stops at the approach position).
+    """
     locked = ctx.state.form_tester.locked_axes
     # Locked axes (FormTester's LockAxis, 6.6.1) are silently ignored, even
     # when a value is given for them - "without causing an error".
@@ -415,17 +451,10 @@ async def _move(ctx: Ctx, motion: _Motion, cause: str, *, relative: bool) -> Non
         relative=relative,
     )
 
-    def moved(current: float, axis: str, value: float | None) -> float:
-        if value is None or axis in locked:
-            return current
-        return current + value if relative else value
-
     x, y, z = ctx.state.cart_cmm.position
-    target = (moved(x, "X", motion.x), moved(y, "Y", motion.y), moved(z, "Z", motion.z))
+    target, rotary_target = _targets(ctx, motion, relative=relative)
+    target = add(target, end_offset)
     rotary = ctx.state.rotary_table
-    rotary_target = rotary.position
-    if motion.r is not None and "R" not in locked:
-        rotary_target = rotary.position + motion.r if relative else motion.r
     if ctx.motion is not None:
         request = MotionRequest(
             cause=cause,
@@ -574,7 +603,9 @@ async def _set_csy_transformation(ctx: Ctx, args: tuple[Argument, ...]) -> Handl
             f"Unknown coordinate system {csy}",
         )
     _require_theta_in_range(transform, CommandName.SET_CSY_TRANSFORMATION)
+    before = csy_context(ctx)
     ctx.state.cart_cmm.csy_transformations[csy] = transform
+    _keep_position(ctx, before)
     return None
 
 
@@ -633,7 +664,9 @@ async def _load_coord_system(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerRes
             CommandName.LOAD_COORD_SYSTEM,
             "Coordinate system not found",
         )
+    before = csy_context(ctx)
     ctx.state.cart_cmm.csy_transformations[_PART_CSY] = transform
+    _keep_position(ctx, before)
     return None
 
 
@@ -665,6 +698,17 @@ async def _pt_meas(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     if motion.align_part is not None:
         apply_part_alignment(ctx, motion.align_part, CommandName.PT_MEAS)
     previous_position = ctx.state.cart_cmm.position
+    if ctx.motion is not None:
+        nominal_position, _ = _targets(ctx, motion, relative=False)
+        direction = (
+            motion.ijk if motion.ijk is not None else sub(nominal_position, previous_position)
+        )
+        try:
+            unit_direction = normalize(direction)
+        except ValueError:
+            unit_direction = None
+        if unit_direction is not None:
+            return await _probe_with_motion(ctx, motion, nominal_position, unit_direction)
     await _move(ctx, motion, CommandName.PT_MEAS, relative=False)
     nominal_position = ctx.state.cart_cmm.position
 
@@ -687,6 +731,35 @@ async def _pt_meas(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
             ctx.state.cart_cmm.position = final_position
 
     return Items(pt_meas_fields(ctx, report_position, unit_direction, CommandName.PT_MEAS))
+
+
+async def _probe_with_motion(ctx: Ctx, motion: _Motion, nominal: Vec3, unit: Vec3) -> HandlerResult:
+    """``PtMeas`` with a motion model: go to the approach position, then run the probing cycle.
+
+    The machine moves to ``nominal + unit * approach`` like any other move; the motion model
+    then searches for the surface (6.12.1), which can take time, find the part early or late, or
+    fail with ``1006``.
+    """
+    parameters = ctx.state.tool.parameters.pt_meas_par
+    approach = ctx.state.part.properties.get("Part.Approach", 0.0) + parameters["Approach"].value
+    await _move(ctx, motion, CommandName.PT_MEAS, relative=False, end_offset=scale(unit, approach))
+    assert ctx.motion is not None  # noqa: S101 (checked by the caller)
+    result = await ctx.motion.probe(
+        ProbeRequest(
+            cause=CommandName.PT_MEAS,
+            nominal=nominal,
+            direction=unit,
+            approach=approach,
+            search=parameters["Search"].value,
+            retract=parameters["Retract"].value,
+            speed=parameters["Speed"].value,
+            accel=parameters["Accel"].value,
+            tool_name=ctx.state.tool.active_name,
+            cancel=ctx.cancel,
+        )
+    )
+    ctx.state.cart_cmm.position = result.rest
+    return Items(pt_meas_fields(ctx, result.contact, unit, CommandName.PT_MEAS))
 
 
 def pt_meas_fields(
@@ -841,7 +914,7 @@ HOME_POSITION: Vec3 = (0.0, 0.0, 0.0)
 
 
 def _move_home(ctx: Ctx) -> None:
-    ctx.state.cart_cmm.position = HOME_POSITION
+    ctx.state.cart_cmm.position = ctx.state.home_position or HOME_POSITION
 
 
 def _reset_report_on_start_session(ctx: Ctx) -> None:

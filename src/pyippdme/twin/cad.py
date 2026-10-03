@@ -100,13 +100,16 @@ def bounding_box(shape: Shape) -> tuple[Vec3, Vec3]:
     return (lo.X(), lo.Y(), lo.Z()), (hi.X(), hi.Y(), hi.Z())
 
 
-def tessellate(shape: Shape, deflection: float | None = None) -> Mesh:
-    """Triangulate ``shape`` (display mesh); ``deflection`` defaults to 0.05 % of its size."""
+def tessellate(shape: Shape, deflection: float | None = None, angular: float = 0.3) -> Mesh:
+    """Triangulate ``shape``; ``deflection`` defaults to 0.05 % of its size (a display mesh).
+
+    ``angular`` is the largest angle between neighbouring normals in radians.
+    """
     lo, hi = bounding_box(shape)
     size = max(hi[i] - lo[i] for i in range(3))
     if size <= 0.0:
         return Mesh(np.zeros((0, 3)), np.zeros((0, 3), dtype=np.int64))
-    BRepMesh_IncrementalMesh(shape, deflection or max(size * 5e-4, 1e-3), False, 0.3, True)
+    BRepMesh_IncrementalMesh(shape, deflection or max(size * 5e-4, 1e-3), False, angular, True)
     vertices: list[tuple[float, float, float]] = []
     faces: list[tuple[int, int, int]] = []
     explorer = TopExp_Explorer(shape, TopAbs_FACE)
@@ -282,6 +285,28 @@ def make_cylinder(
     return BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(*origin), gp_Dir(*axis)), radius, height).Shape()
 
 
+def rounded_box(
+    dx: float, dy: float, dz: float, origin: Vec3 = (0.0, 0.0, 0.0), radius: float = 0.0
+) -> Shape:
+    """A box with all edges rounded by ``radius`` (a plain box if the radius is zero)."""
+    box = make_box(dx, dy, dz, origin)
+    if radius <= 0.0:
+        return box
+    from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
+    from OCP.TopAbs import TopAbs_EDGE
+
+    fillet = BRepFilletAPI_MakeFillet(box)
+    explorer = TopExp_Explorer(box, TopAbs_EDGE)
+    while explorer.More():
+        fillet.Add(min(radius, min(dx, dy, dz) / 2.5), TopoDS.Edge(explorer.Current()))
+        explorer.Next()
+    try:
+        fillet.Build()
+        return fillet.Shape() if fillet.IsDone() else box
+    except Exception:  # a failed fillet only costs the rounding
+        return box
+
+
 def make_sphere(radius: float, center: Vec3 = (0.0, 0.0, 0.0)) -> Shape:
     return BRepPrimAPI_MakeSphere(gp_Pnt(*center), radius).Shape()
 
@@ -296,6 +321,26 @@ def make_compound(shapes: list[Shape]) -> Shape:
     for shape in shapes:
         builder.Add(compound, shape)
     return compound
+
+
+def common(a: Shape, b: Shape) -> Shape:
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
+
+    return BRepAlgoAPI_Common(a, b).Shape()
+
+
+def make_prism_xz(profile: list[tuple[float, float]], width_y: float) -> Shape:
+    """Extrude a polygon given in (x, z) along +Y by ``width_y``."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.gp import gp_Vec
+
+    polygon = BRepBuilderAPI_MakePolygon()
+    for x, z in profile:
+        polygon.Add(gp_Pnt(x, 0.0, z))
+    polygon.Close()
+    face = BRepBuilderAPI_MakeFace(polygon.Wire()).Face()
+    return BRepPrimAPI_MakePrism(face, gp_Vec(0.0, width_y, 0.0)).Shape()
 
 
 def fuse(a: Shape, b: Shape) -> Shape:

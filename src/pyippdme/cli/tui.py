@@ -550,9 +550,9 @@ class IppDmeTui(App[None]):
 
     async def on_mount(self) -> None:
         if self._virtual:
-            from pyippdme.simulation.virtual_cmm import VirtualCMM
+            from pyippdme.cli.virtual import create_embedded
 
-            self._embedded_server = VirtualCMM(network=MemoryNetwork())
+            self._embedded_server = create_embedded(MemoryNetwork())
             port = await self._embedded_server.start()
             self._append_log("[green]Started an in-process VirtualCMM[/green]")
             self.query_one("#host_input", Input).value = VIRTUAL_HOST

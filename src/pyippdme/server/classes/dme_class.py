@@ -53,6 +53,8 @@ async def _get_machine_class(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerRe
 
 
 async def _home(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
+    if ctx.motion is not None:
+        ctx.state.home_position = await ctx.motion.home(ctx.cancel)
     ctx.state.homed = True
     # No further state of its own - a class with a documented "Home()
     # triggers this" side effect (Mover 6.7.1's implicit DisableUser())

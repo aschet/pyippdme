@@ -114,9 +114,9 @@ async def start_embedded_server() -> tuple[str, int, IppDmeServer[SimulationStat
     :mod:`pyippdme.cli.tui`), since the TUI's app-lifecycle logging makes
     sharing this one awkward, not because the logic itself differs.
     """
-    from pyippdme.simulation.virtual_cmm import VirtualCMM
+    from pyippdme.cli.virtual import create_embedded
 
-    server = VirtualCMM(network=MemoryNetwork())
+    server = create_embedded(MemoryNetwork())
     port = await server.start()
     return VIRTUAL_HOST, port, server
 

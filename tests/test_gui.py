@@ -58,7 +58,7 @@ def test_a_client_drives_the_machine_through_the_window(window: MainWindow) -> N
         await machine.start_session()
         await machine.dme.home()
         await machine.cart_cmm.go_to(x=325, y=335, z=50)
-        z = (await machine.cart_cmm.pt_meas(x=325, y=335, z=20, ijk=(0, 0, -1))).number("Z")
+        z = (await machine.cart_cmm.pt_meas(x=325, y=335, z=20, ijk=(0, 0, 1))).number("Z")
         await machine.close()
         return z
 

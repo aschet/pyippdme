@@ -24,6 +24,14 @@ from pyippdme.protocol.parameters import ParameterName
 from pyippdme.protocol.transport import DEFAULT_PORT
 from pyippdme.server import IppDmeServer
 from pyippdme.server.dispatch import command, command_proprietary, register_object
+from pyippdme.server.motion import (
+    MotionError,
+    MotionModel,
+    MotionRequest,
+    ProbeRequest,
+    ProbeResult,
+    ToolHandler,
+)
 from pyippdme.server.registry import (
     CommandContext,
     CommandRegistry,
@@ -37,16 +45,20 @@ from pyippdme.simulation import DEFAULT_COMMAND_CLASSES
 from pyippdme.simulation.surface import CylinderSurface, PlaneSurface, SphereSurface
 from pyippdme.simulation.virtual_cmm import VirtualCMM
 from pyippdme.spy import Spy, SpyDirection, SpyMessage
+from pyippdme.types.csy import CSY_CHAIN, CoordinateTransform, CsyContext
 
 __version__ = "0.1.0"
 
 __all__ = [
+    "CSY_CHAIN",
     "DEFAULT_COMMAND_CLASSES",
     "DEFAULT_PORT",
     "TCP_NETWORK",
     "CommandContext",
     "CommandName",
     "CommandRegistry",
+    "CoordinateTransform",
+    "CsyContext",
     "CylinderSurface",
     "ErrorSeverity",
     "IppDmeClient",
@@ -59,9 +71,14 @@ __all__ = [
     "IppDmeTimeoutError",
     "MachineState",
     "MemoryNetwork",
+    "MotionError",
+    "MotionModel",
+    "MotionRequest",
     "Network",
     "ParameterName",
     "PlaneSurface",
+    "ProbeRequest",
+    "ProbeResult",
     "RawSensor",
     "SampleSurface",
     "ServerError",
@@ -69,6 +86,7 @@ __all__ = [
     "Spy",
     "SpyDirection",
     "SpyMessage",
+    "ToolHandler",
     "VirtualCMM",
     "__version__",
     "command",

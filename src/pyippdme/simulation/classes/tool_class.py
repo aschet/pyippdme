@@ -61,7 +61,16 @@ from __future__ import annotations
 import math
 from datetime import UTC, datetime
 
-from pyippdme.protocol.ast import Argument, Items, NamedValue, Number, NumericData, String, Xml
+from pyippdme.protocol.ast import (
+    Argument,
+    BasicName,
+    Items,
+    NamedValue,
+    Number,
+    NumericData,
+    String,
+    Xml,
+)
 from pyippdme.protocol.commands import CommandName
 from pyippdme.protocol.errors import ErrorCode, ErrorSeverity, ServerError
 from pyippdme.protocol.signature import DataType, Parameter
@@ -69,7 +78,9 @@ from pyippdme.server import builders
 from pyippdme.server._util import bad_argument
 from pyippdme.server.registry import CommandHandler, CommandRegistry, HandlerResult, PropertyKind
 from pyippdme.server.tool import PARAMETER_FIELDS, ParameterField, ToolParameter, ToolParameters
-from pyippdme.simulation.context import Ctx
+from pyippdme.simulation.context import Ctx, csy_context
+from pyippdme.types.obb import OBB_TOKEN
+from pyippdme.types.toolcollection import CollectionNode, ToolRef, add_reference, resolve_tool
 from pyippdme.types.tool_id import (
     BASIC_FUNCTIONS,
     ContinuousAlignMode,
@@ -151,7 +162,74 @@ TOOL_CATALOG: dict[str, tuple[ToolId, Vec3]] = {
 #: Catalog tools this simulation treats as alignable (``IsAlignable()`` (1);
 #: see the module docstring for what "alignable" means here). Every other
 #: :data:`TOOL_CATALOG` entry stays fixed/non-alignable.
-_ALIGNABLE_TOOLS = frozenset({"AlignProbe"})
+_ALIGNABLE_TOOLS: set[str] = {"AlignProbe"}
+_BUILTIN_TOOLS = frozenset(TOOL_CATALOG)
+
+
+def register_tool(name: str, tool_id: ToolId, offset: Vec3, *, alignable: bool = False) -> None:
+    """Add (or replace) a tool of :data:`TOOL_CATALOG` for every server in this process.
+
+    ``offset`` is the tool's tip relative to ``RefTool``, used to answer
+    ``GetChangeToolAction`` (6.22.1). A simulation with its own tools (see
+    :mod:`pyippdme.twin`) registers them before it starts serving, and takes
+    them out again with :func:`unregister_tool`. The catalog is process-wide, as
+    :data:`TOOL_CATALOG` itself is.
+    """
+    TOOL_CATALOG[name] = (tool_id, offset)
+    if alignable:
+        _ALIGNABLE_TOOLS.add(name)
+    else:
+        _ALIGNABLE_TOOLS.discard(name)
+
+
+#: References into the tool list that ``register_collection_entry`` added: a tree over
+#: :data:`TOOL_CATALOG` (6.22, Figure 56). The flat collection ``DEFAULT_TOOL_COLLECTION``
+#: always exists beside it and holds every tool under its own name.
+_COLLECTIONS = CollectionNode("")
+
+
+def collection_root() -> CollectionNode:
+    """The root of all tool collections: the flat one of every tool, and the registered ones."""
+    flat = CollectionNode(DEFAULT_TOOL_COLLECTION, [ToolRef(name, name) for name in TOOL_CATALOG])
+    return CollectionNode("", [flat, *_COLLECTIONS.children])
+
+
+def register_collection_entry(path: str, name: str, tool: str) -> None:
+    """Reference the catalog tool ``tool`` as ``name`` in the collection at ``path``.
+
+    Nodes on the way are created; the same tool can be referenced any number of times, under
+    any name (Figure 56). Like :func:`register_tool` this is process-wide.
+    """
+    add_reference(_COLLECTIONS, path, name, tool)
+
+
+def clear_collections() -> None:
+    """Remove every collection that :func:`register_collection_entry` added."""
+    _COLLECTIONS.children.clear()
+
+
+def resolve_tool_name(ctx: Ctx, name: str) -> str | None:
+    """The catalog tool that ``name`` means: an entry of the opened collection, else a tool name."""
+    mapped = resolve_tool(collection_root(), ctx.state.tool.open_collection, name)
+    if mapped is not None and mapped in TOOL_CATALOG:
+        return mapped
+    return name if name in TOOL_CATALOG else None
+
+
+def reset_registered_tools() -> None:
+    """Remove every tool and collection that was registered; only the built-in tools stay."""
+    for name in [n for n in TOOL_CATALOG if n not in _BUILTIN_TOOLS]:
+        unregister_tool(name)
+    clear_collections()
+
+
+def unregister_tool(name: str) -> None:
+    """Remove a tool that :func:`register_tool` added; the built-in tools stay."""
+    if name in _BUILTIN_TOOLS:
+        raise ValueError(f"{name!r} is a built-in tool")
+    TOOL_CATALOG.pop(name, None)
+    _ALIGNABLE_TOOLS.discard(name)
+
 
 #: A never-aligned tool's default orientation: pointing away from a surface
 #: below it (6.20.1's own "away from the surface" convention for ``i1,j1,k1``),
@@ -356,12 +434,49 @@ def apply_tool_orientation(
     ctx.state.tool.alignment[tool_name] = (new_primary, new_secondary)
 
 
+#: The ``basicfunction`` (Annex G) a command needs from a tool, where the standard names one.
+_COMMAND_FUNCTION: dict[str, str] = {
+    CommandName.PT_MEAS: "PtMeas",
+    CommandName.PT_MEAS_SELF_CENTER: "PTMeasSelfCenter",
+    CommandName.PT_MEAS_SELF_CENTER_LOCKED: "PTMeasSelfCenterLocked",
+    CommandName.SCAN_ON_LINE: "ScanOnLine",
+    CommandName.SCAN_ON_CIRCLE: "ScanOnCircle",
+    CommandName.SCAN_ON_HELIX: "ScanOnHelix",
+    CommandName.SCAN_ON_CURVE: "ScanOnCurve",
+    CommandName.SCAN_IN_PLANE_END_IS_SPHERE: "ScanOnLine",
+    CommandName.SCAN_IN_PLANE_END_IS_PLANE: "ScanOnLine",
+    CommandName.SCAN_IN_PLANE_END_IS_CYL: "ScanOnLine",
+    CommandName.DATA_ACQUIRE: "DataAcquire",
+}
+
+
+def require_tool_function(ctx: Ctx, cause: str) -> None:
+    """Raise ``2002`` if the active tool's ``basicfunction`` list lacks what ``cause`` needs.
+
+    Only tools added with :func:`register_tool` are checked; the built-in tools
+    accept every command, as the simulation always did.
+    """
+    name = ctx.state.tool.active_name
+    function = _COMMAND_FUNCTION.get(cause)
+    entry = TOOL_CATALOG.get(name)
+    if name in _BUILTIN_TOOLS or function is None or entry is None:
+        return
+    if function not in entry[0].basic_functions:
+        raise ServerError(
+            ErrorSeverity.ERROR,
+            ErrorCode.PROBE_TYPE_NOT_ALLOWED,
+            cause,
+            "Type of probe does not allow this operation",
+        )
+
+
 def require_measuring_tool(ctx: Ctx, cause: str) -> None:
     """Raise ``1503`` while no tool is loaded; with ``NoTool`` the machine only moves (6.10.1)."""
     if ctx.state.tool.active_name == NO_TOOL:
         raise ServerError(
             ErrorSeverity.CRITICAL, ErrorCode.TOOL_NOT_DEFINED, cause, "Tool not defined"
         )
+    require_tool_function(ctx, cause)
 
 
 #: ``Tool.<X>``/``FoundTool.<X>`` properties that ``GetProp`` answers (6.10.3, 6.20.2).
@@ -399,7 +514,9 @@ def _try_get_named_tool_property(ctx: Ctx, arg: NamedValue) -> NamedValue | None
         return None  # Collection/LastQualified/Alignment: e.g. FoundTool.* before FindTool()
     tool_name = maybe_tool_name
     if leaf == "Collection":
-        return NamedValue(arg.name, (String(DEFAULT_TOOL_COLLECTION),))
+        return NamedValue(
+            arg.name, (String(ctx.state.tool.open_collection or DEFAULT_TOOL_COLLECTION),)
+        )
     if leaf == "LastQualified":
         when = ctx.state.tool.last_qualified.get(tool_name, _NEVER_QUALIFIED)
         return NamedValue(arg.name, (String(when),))
@@ -415,9 +532,29 @@ def _try_get_named_tool_property(ctx: Ctx, arg: NamedValue) -> NamedValue | None
         # "Relative to an arbitrary reference point which changes from server to server"
         # (Table 116): this simulation has no offset model, so zero.
         return NamedValue(arg.name, tuple(Number.of(0.0) for _ in range(3)))
-    if leaf in ("CollisionVolume", "AlignmentVolume"):
-        # No collision geometry is modeled: no boxes/spheres is the honest answer.
-        return NamedValue(arg.name, ())
+    if leaf == "AlignmentVolume":
+        # Figures 52/53: a sphere about the head's pivot that holds the tool in every alignment;
+        # the centre is the vector from the tool's reference point, in the active CSY.
+        volume = ctx.tool_handler.alignment_volume(tool_name) if ctx.tool_handler else None
+        if volume is None:
+            return NamedValue(arg.name, ())
+        centre, radius = volume
+        centre = csy_context(ctx).direction_to_client(centre)
+        return NamedValue(arg.name, tuple(Number.of(v) for v in (*centre, radius)))
+    if leaf == "CollisionVolume":
+        # Figures 49-51: oriented bounding boxes that cover the tool, each as ``OBB`` and 15
+        # numbers, in the active CSY (a rotated tool gets rotated boxes).
+        boxes = ctx.tool_handler.collision_volume(tool_name) if ctx.tool_handler else None
+        if boxes is None:
+            return NamedValue(arg.name, ())
+        context = csy_context(ctx)
+        arguments: list[Argument] = []
+        for box in boxes:
+            arguments.append(BasicName(OBB_TOKEN))
+            arguments.extend(
+                Number.of(v) for v in box.mapped(context.direction_to_client).numbers()
+            )
+        return NamedValue(arg.name, tuple(arguments))
     # Only "Id" remains at this point.
     tool_id, _offset = TOOL_CATALOG[tool_name]
     return NamedValue(arg.name, (), Xml(tool_id_to_xml(tool_id)))
@@ -503,9 +640,11 @@ async def _is_alignable(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
 async def _re_qualify(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
     # 6.10.2's own "General Remarks" under ReQualify(): "does not explicitly respond a
     # successful requalification... if the method terminates without
-    # sending an error, the tool is requalified successfully" - there is no
-    # real calibration artefact here to measure against, so this always
-    # succeeds and just records when it happened.
+    # sending an error, the tool is requalified successfully" - without a tool
+    # handler there is no calibration artefact to measure against, so this
+    # always succeeds and just records when it happened.
+    if ctx.tool_handler is not None:
+        await ctx.tool_handler.requalify(ctx.state.tool.active_name, ctx.cancel)
     ctx.state.tool.last_qualified[ctx.state.tool.active_name] = datetime.now(UTC).strftime(
         "%Y%m%dT%H%M%SZ"
     )

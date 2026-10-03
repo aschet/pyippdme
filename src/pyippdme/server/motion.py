@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from pyippdme.protocol.errors import ServerError
+from pyippdme.types.csy import CsyContext
+from pyippdme.types.obb import Obb
 from pyippdme.types.vec3 import Vec3
 
 
@@ -44,6 +46,39 @@ class MotionRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class ProbeRequest:
+    """The probing cycle of ``PtMeas`` (6.12.1) from the approach position.
+
+    The machine stands at ``nominal + direction * approach``; ``direction`` points from the
+    surface towards the probe. It searches towards the surface for up to
+    ``approach + search``, and retracts by ``retract`` (negative: back to the approach
+    position) after the trigger.
+    """
+
+    cause: str
+    nominal: Vec3
+    direction: Vec3
+    approach: float
+    search: float
+    retract: float
+    #: Speed and acceleration of the search (``PtMeasPar``).
+    speed: float
+    accel: float
+    tool_name: str
+    cancel: asyncio.Event
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeResult:
+    """What the cycle found: the measured surface point and where the machine rests."""
+
+    #: The measured point on the surface (compensated for the tip radius).
+    contact: Vec3
+    #: Tool centre point after the retract.
+    rest: Vec3
+
+
+@dataclass(frozen=True, slots=True)
 class MotionError(ServerError):
     """A move that ended early: the machine stands at :attr:`stopped_at`, not at the target."""
 
@@ -51,7 +86,61 @@ class MotionError(ServerError):
 
 
 @runtime_checkable
+class ToolHandler(Protocol):
+    """The physical side of changing and qualifying tools.
+
+    Without one, ``ChangeTool`` and ``ReQualify`` take no time and always
+    succeed. A handler can animate the trip to the tool rack, refuse while the
+    machine is not ready, or find the reference sphere for ``ReQualify``;
+    raise a :class:`~pyippdme.protocol.errors.ServerError` to fail the command.
+    """
+
+    async def change_tool(
+        self, current: str, target: str, position: Vec3, cancel: asyncio.Event
+    ) -> None: ...
+
+    async def requalify(self, tool_name: str, cancel: asyncio.Event) -> None: ...
+
+    def alignment_volume(self, tool_name: str) -> tuple[Vec3, float] | None:
+        """The sphere the tool occupies while it is aligned (``Tool.AlignmentVolume``, Fig. 52/53).
+
+        ``(centre, radius)``: the vector from the tool's reference point to the sphere centre,
+        in machine coordinates, and the radius. ``None`` if the tool has no such volume.
+        """
+        ...
+
+    def collision_volume(self, tool_name: str) -> list[Obb] | None:
+        """Oriented bounding boxes covering the tool (``Tool.CollisionVolume``, Figures 49-51).
+
+        Centres relative to the tool's reference point and axes, in machine coordinates.
+        ``None`` if the tool has no such volume.
+        """
+        ...
+
+
+@runtime_checkable
 class MotionModel(Protocol):
     """Carries out a move; returns the position the tool centre point ends at."""
 
     async def travel(self, request: MotionRequest) -> Vec3: ...
+
+    async def probe(self, request: ProbeRequest) -> ProbeResult:
+        """Search for the surface from the approach position; raise ``1006`` if none is found."""
+        ...
+
+    def csy_context(self) -> CsyContext | None:
+        """The coordinate system chain as this machine has it, or ``None`` for the default.
+
+        A model that knows more than the commands set (the angle of its rotary table for
+        ``RotaryTableVarCsy``) returns the complete context; the position a client reads is
+        kept consistent through it when the client changes coordinate system.
+        """
+        ...
+
+    async def home(self, cancel: asyncio.Event) -> Vec3 | None:
+        """Drive to the reference position for ``Home()``; raise a ``ServerError`` if it cannot.
+
+        Returns where the machine stands afterwards in the coordinates a client sees (the
+        active coordinate system), or ``None`` for the machine's own home position.
+        """
+        ...

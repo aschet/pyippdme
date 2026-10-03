@@ -25,7 +25,7 @@ travelled, Z up.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -42,6 +42,7 @@ from pyippdme.twin.spec import (
     load_manifest,
     manifest_to_toml,
 )
+from pyippdme.twin.toolmath import HOUSING_HEIGHT, rack_keys, rack_slots
 from pyippdme.types.vec3 import Vec3
 
 #: Name fragments that give a STEP part its role when only an assembly is available.
@@ -62,34 +63,76 @@ class MachineBody:
     shape: cad.Shape
     mesh: Mesh
     color: tuple[float, float, float]
+    #: Exact bounding box of ``shape``, computed once.
+    bounds: tuple[Vec3, Vec3] = field(default=((0.0,) * 3, (0.0,) * 3), repr=False)
+
+    def __post_init__(self) -> None:
+        self.bounds = cad.bounding_box(self.shape)
 
 
 _DEFAULT_COLORS = {
-    "table": (0.25, 0.25, 0.28),
-    "bridge": (0.55, 0.58, 0.62),
-    "carriage": (0.65, 0.67, 0.7),
-    "quill": (0.75, 0.77, 0.8),
-    "rotary": (0.35, 0.4, 0.45),
+    "table": (0.13, 0.13, 0.15),
+    "stand": (0.2, 0.21, 0.24),
+    "bridge": (0.72, 0.74, 0.78),
+    "carriage": (0.82, 0.84, 0.88),
+    "quill": (0.88, 0.89, 0.92),
+    "rack": (0.3, 0.33, 0.38),
+    "rotary": (0.3, 0.34, 0.4),
 }
 
+#: Distance of the quill bottom above the tool centre point of the reference tool at home.
+_QUILL_BOTTOM = HOUSING_HEIGHT + 72.0
 
-def _default_shape(name: str, spec: MachineSpec) -> cad.Shape:
+
+def _default_shape(name: str, spec: MachineSpec, slots: dict[str, Vec3]) -> cad.Shape:
     tx, ty, tz = spec.travel
     top = spec.table_top_z
     if name == "table":
-        return cad.make_box(tx + 300.0, ty + 400.0, 200.0, (-150.0, -200.0, top - 200.0))
+        return cad.rounded_box(tx + 400.0, ty + 500.0, 240.0, (-200.0, -250.0, top - 240.0), 6.0)
+    if name == "stand":
+        legs = [
+            cad.rounded_box(110.0, 110.0, 380.0, (x, y, top - 620.0), 6.0)
+            for x in (-180.0, tx + 70.0)
+            for y in (-230.0, ty + 120.0)
+        ]
+        frame = [
+            cad.make_box(tx + 400.0, 60.0, 40.0, (-200.0, y, top - 360.0))
+            for y in (-205.0, ty + 145.0)
+        ]
+        shape = legs[0]
+        for part in (*legs[1:], *frame):
+            shape = cad.fuse(shape, part)
+        return shape
     if name == "bridge":
-        legs = cad.fuse(
-            cad.make_box(70.0, 90.0, tz + 260.0, (-120.0, -45.0, top)),
-            cad.make_box(70.0, 90.0, tz + 260.0, (tx + 50.0, -45.0, top)),
-        )
-        beam = cad.make_box(tx + 240.0, 90.0, 110.0, (-120.0, -45.0, tz + 160.0))
-        return cad.fuse(legs, beam)
+        beam_z = tz + 160.0
+        feet = [
+            cad.rounded_box(150.0, 240.0, 50.0, (x, -120.0, top), 8.0) for x in (-205.0, tx + 55.0)
+        ]
+        legs = [
+            cad.rounded_box(110.0, 170.0, beam_z + 200.0 - top, (x, -85.0, top), 12.0)
+            for x in (-185.0, tx + 75.0)
+        ]
+        beam = cad.rounded_box(tx + 400.0, 190.0, 210.0, (-200.0, -95.0, beam_z), 14.0)
+        shape = beam
+        for part in (*legs, *feet):
+            shape = cad.fuse(shape, part)
+        return shape
     if name == "carriage":
-        return cad.make_box(140.0, 120.0, 130.0, (-70.0, -60.0, tz + 130.0))
+        beam_z = tz + 160.0
+        return cad.rounded_box(230.0, 250.0, 250.0, (-115.0, -125.0, beam_z - 20.0), 14.0)
     if name == "quill":
-        # Hangs from the carriage; its lower end is the probe mount, 75 mm above the TCP.
-        return cad.make_box(50.0, 50.0, tz + 145.0, (-25.0, -25.0, 75.0))
+        return cad.rounded_box(84.0, 84.0, tz + 190.0, (-42.0, -42.0, _QUILL_BOTTOM), 8.0)
+    if name == "rack":
+        keys = list(slots)
+        xs = [p[0] for p in slots.values()]
+        y = next(iter(slots.values()))[1] if slots else ty - 45.0
+        x0, x1 = (min(xs) - 40.0, max(xs) + 40.0) if xs else (0.0, 100.0)
+        plate = cad.rounded_box(x1 - x0, 70.0, 14.0, (x0, y - 35.0, top), 3.0)
+        shape = plate
+        for key in keys:
+            sx, sy, _ = slots[key]
+            shape = cad.fuse(shape, cad.make_cylinder(15.0, 6.0, (sx, sy, top + 14.0)))
+        return shape
     if name == "rotary":
         o = spec.rotary_origin or (tx / 2, ty / 2, top)
         return cad.make_cylinder(150.0, 20.0 - top, (o[0], o[1], top))
@@ -99,9 +142,11 @@ def _default_shape(name: str, spec: MachineSpec) -> cad.Shape:
 def _default_components(spec: MachineSpec) -> tuple[ComponentSpec, ...]:
     comps = [
         ComponentSpec("table"),
+        ComponentSpec("stand", collides=False),
         ComponentSpec("bridge", moves_with=("y",)),
-        ComponentSpec("carriage", moves_with=("x", "y")),
-        ComponentSpec("quill", moves_with=("x", "y", "z"), collides=True),
+        ComponentSpec("carriage", moves_with=("x", "y"), collides=False),
+        ComponentSpec("quill", moves_with=("x", "y", "z")),
+        ComponentSpec("rack"),
     ]
     if spec.rotary_origin is not None:
         comps.append(ComponentSpec("rotary", rotates=True))
@@ -157,20 +202,26 @@ class MachineModel:
         directory: Path | None,
     ) -> MachineModel:
         bodies: list[MachineBody] = []
+        tool_specs = {**DEFAULT_TOOLS, **(manifest.tools if manifest else {})}
+        slots = rack_slots(spec, rack_keys(tool_specs))
         origin = manifest.origin if manifest and manifest.origin else None
         shift = geometry.translation(*(-c for c in origin)) if origin else None
         for comp in components:
             if comp.step is not None:
                 base = directory or Path()
                 parts = cad.load_cad(base / comp.step)
-                for part in parts:
-                    shape = part.shape if shift is None else cad.moved(part.shape, shift)
-                    color = (
-                        comp.color or part.color or _DEFAULT_COLORS.get(comp.name, (0.6, 0.6, 0.6))
-                    )
-                    bodies.append(MachineBody(comp, shape, cad.tessellate(shape), color))
+                merged = (
+                    parts[0].shape
+                    if len(parts) == 1
+                    else cad.make_compound([part.shape for part in parts])
+                )
+                shape = merged if shift is None else cad.moved(merged, shift)
+                color = (
+                    comp.color or parts[0].color or _DEFAULT_COLORS.get(comp.name, (0.6, 0.6, 0.6))
+                )
+                bodies.append(MachineBody(comp, shape, cad.tessellate(shape), color))
             else:
-                shape = _default_shape(comp.name, spec)
+                shape = _default_shape(comp.name, spec, slots)
                 color = comp.color or _DEFAULT_COLORS.get(comp.name, (0.6, 0.6, 0.6))
                 bodies.append(MachineBody(comp, shape, cad.tessellate(shape), color))
         return cls(spec, bodies, manifest.tools if manifest else None, manifest, directory)
@@ -243,11 +294,20 @@ class MachineModel:
 
     # -- kinematics --------------------------------------------------------------------
 
-    def body_pose(self, body: MachineBody, position: Vec3, rotary_deg: float) -> Matrix:
+    def body_pose(
+        self,
+        body: MachineBody,
+        position: Vec3,
+        rotary_deg: float,
+        shift: Vec3 = (0.0, 0.0, 0.0),
+    ) -> Matrix:
+        """Pose of a component; ``shift`` is how far the head pivot is from where the quill
+        was built for (a different tool, an articulated head).
+        """
         offset = [0.0, 0.0, 0.0]
         for axis in body.spec.moves_with:
             i = "xyz".index(axis)
-            offset[i] = position[i]
+            offset[i] = position[i] + shift[i]
         m = geometry.translation(*offset)
         if body.spec.rotates and self.spec.rotary_origin is not None:
             m = m @ geometry.rotation_about(
@@ -260,6 +320,9 @@ class MachineModel:
         if self.spec.rotary_origin is None:
             return geometry.identity()
         return geometry.rotation_about(self.spec.rotary_origin, self.spec.rotary_axis, rotary_deg)
+
+    def rack_slots(self) -> dict[str, Vec3]:
+        return rack_slots(self.spec, rack_keys(self.tools))
 
     def tool(self, name: str) -> ToolSpec:
         return self.tools.get(name) or ToolSpec(name)

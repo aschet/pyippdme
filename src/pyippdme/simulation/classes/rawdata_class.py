@@ -55,6 +55,7 @@ from pyippdme.rawdata.transfer import (
 from pyippdme.server import builders
 from pyippdme.server._util import bad_argument
 from pyippdme.server.registry import CommandRegistry, HandlerResult
+from pyippdme.simulation.classes.tool_class import require_tool_function
 from pyippdme.simulation.context import Ctx
 from pyippdme.types.pointcloud import MeasPoint, PointCloud, PointCloudSet, PointSet
 from pyippdme.types.rawdata import AdvDataStruct
@@ -149,6 +150,7 @@ async def _data_acquire(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
         or not isinstance(args[3], Number)
     ):
         raise bad_argument(CommandName.DATA_ACQUIRE)
+    require_tool_function(ctx, CommandName.DATA_ACQUIRE)
     acq_name = args[0].value
     acquisition_type = args[1].value
     if acquisition_type not in _ACQUISITION_TYPES:

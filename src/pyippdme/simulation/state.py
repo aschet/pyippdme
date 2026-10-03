@@ -71,6 +71,9 @@ class ToolState:
     #: :func:`~pyippdme.simulation.classes.tool_class.tool_alignment` for the
     #: default this falls back to.
     alignment: dict[str, tuple[Vec3, Vec3 | None]] = field(default_factory=dict)
+    #: Path of the tool collection opened by ``OpenToolCollection`` (6.22, Figure 56); tools are
+    #: then named by the entries of that collection. ``None``: tool names are used as they are.
+    open_collection: str | None = None
     #: ``UseSmallestAngletoAlignTool()``'s modal flag (6.20.1) - reset to
     #: ``False`` by ``StartSession()``.
     use_smallest_angle: bool = False

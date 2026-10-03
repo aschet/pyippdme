@@ -13,12 +13,12 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
+from pyippdme.cli import virtual
 from pyippdme.cli.session_log import SessionLog, strip_tag
 from pyippdme.exceptions import IppDmeConnectionError
 from pyippdme.protocol.transport import DEFAULT_PORT
 from pyippdme.server.registry import CommandRegistry, component_name
 from pyippdme.simulation import DEFAULT_COMMAND_CLASSES
-from pyippdme.simulation.virtual_cmm import VirtualCMM
 from pyippdme.types.csy import FileCsyStore
 
 #: Maps a ``--components`` name to its registration function, derived from
@@ -67,6 +67,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--file",
         help="run every command in this file instead of prompting interactively, one per line",
     )
+    virtual.add_arguments(client_parser)
     client_parser.add_argument(
         "--session-log",
         help="also record every wire line sent/received, plus connect/disconnect, to this "
@@ -88,6 +89,7 @@ def _build_parser() -> argparse.ArgumentParser:
     tui_parser = subparsers.add_parser(
         "tui", help="full-screen terminal UI for sending commands to a server (needs pyippdme[tui])"
     )
+    virtual.add_arguments(tui_parser)
     tui_parser.add_argument("host", nargs="?", help="server host to connect to on startup")
     tui_parser.add_argument("port", nargs="?", type=int, default=DEFAULT_PORT, help="server port")
     tui_parser.add_argument(
@@ -116,6 +118,7 @@ def _build_parser() -> argparse.ArgumentParser:
         + ", ".join(sorted(_COMPONENTS_BY_NAME))
         + " - GetMachineClass() (6.4.1) is derived from this selection",
     )
+    virtual.add_arguments(serve_parser)
     serve_parser.add_argument(
         "--csy-dir", help="directory for persisted coordinate systems (default: ~/.pyippdme/csy)"
     )
@@ -216,6 +219,7 @@ async def _run_serve(
     csy_dir: str | None,
     session_log: str | None,
     commands_file: str | None,
+    options: virtual.SimulationOptions,
 ) -> None:
     if verbose:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -238,7 +242,8 @@ async def _run_serve(
             if commands is not None:
                 print(strip_tag(text), file=commands)
 
-        server = VirtualCMM(
+        server = virtual.build_server(
+            options,
             csy_store=csy_store,
             command_classes=components,
             on_line_received=on_line_received,
@@ -246,7 +251,8 @@ async def _run_serve(
             on_connect=log.connected,
             on_disconnect=log.disconnected,
         )
-        print(f"pyippdme VirtualCMM server listening on {host}:{port}")
+        kind = "digital twin" if options.uses_twin else "VirtualCMM"
+        print(f"pyippdme {kind} server listening on {host}:{port}")
         await server.serve_forever(host, port)
 
 
@@ -277,6 +283,8 @@ def main() -> None:
         _run_gui(sys.argv[2:])
     parser = _build_parser()
     args = parser.parse_args()
+    if args.command in ("client", "tui"):
+        virtual.configure(virtual.options_from_args(args))
     if args.command in ("client", "tui") and args.virtual and args.host is not None:
         parser.error("argument host: not allowed with argument --virtual")
     if args.command == "client" and not args.virtual and args.host is None:
@@ -308,6 +316,7 @@ def main() -> None:
                     args.csy_dir,
                     args.session_log,
                     args.commands_file,
+                    virtual.options_from_args(args),
                 )
             )
         elif args.command == "spy":

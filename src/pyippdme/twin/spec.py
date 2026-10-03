@@ -17,7 +17,7 @@ with the values of the machine you simulate.
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
 from pyippdme.types.vec3 import Vec3
@@ -38,10 +38,15 @@ class Accuracy:
         return (self.a_um + length_mm / self.k) * 1e-3
 
     def sigma_mm(self, length_mm: float) -> float:
-        """One standard deviation of a probed point, a third of the MPE (95 %+ inside it)."""
+        """One standard deviation of the random error of a probed point.
+
+        Sized so that 25 points on a sphere spread by well under MPE_P (the peak-to-valley of
+        ``n`` normal samples is about ``3.9 sigma``) and the length error stays inside
+        MPE_E(L) once the systematic parts of the probe are added.
+        """
         e = self.length_error_mm(length_mm)
         p = self.probing_um * 1e-3
-        return float(((e / 3.0) ** 2 + (p / 3.0) ** 2) ** 0.5)
+        return float(((0.12 * p) ** 2 + (e / 12.0) ** 2) ** 0.5)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,44 +112,288 @@ PRESETS: dict[str, MachineSpec] = {
 }
 
 
+#: Measurement modes of a tool and what they allow (``basicfunction`` of Annex G).
+MODES = ("touch", "head_touch", "scanning", "laser", "point_laser", "area", "camera", "none")
+#: Heads that carry the probe: fixed mount, indexing (PH10 style) or continuous 5-axis (PH20/REVO style).
+HEADS = ("fixed", "indexed", "continuous")
+TIPS = ("down", "+x", "-x", "+y", "-y")
+
+
 @dataclass(frozen=True, slots=True)
 class ToolSpec:
-    """The physical stylus of a tool: a ball on a stem, optionally on an indexable head.
+    """A probe system defined by numbers, not by CAD: head, probe, stylus and how it measures.
 
-    The tool's name is the one the protocol uses (``Tool.Name()``, ``ChangeTool``).
+    The tool's ``name`` is the one the protocol uses (``Tool.Name()``,
+    ``ChangeTool``). Everything else can be edited in the simulator window or in
+    ``machine.toml`` (``[[tool]]``). The shapes drawn and checked for collisions
+    are generated from these numbers.
     """
 
     name: str
+    #: ``touch`` (kinematic or strain-gauge touch trigger), ``head_touch`` (the head flicks the
+    #: stylus out for fast points, PH20/REVO style), ``scanning``, an optical sensor (``laser``
+    #: line scanner, ``point_laser``, ``area`` scanner, ``camera``) or ``none``.
+    mode: str = "touch"
+    head: str = "fixed"
+    #: Step of an indexing head in degrees (PH10: 7.5).
+    index_step: float = 7.5
+    # -- probe body and extension (mm)
+    probe_radius: float = 10.0
+    probe_length: float = 28.0
+    extension: float = 0.0
+    # -- stylus (mm); a star adds four arms of ``arm_length`` with a ball on each
     ball_radius: float = 1.5
-    stem_radius: float = 0.75
-    #: Distance from the ball centre (the TCP) up to the probe body.
-    stem_length: float = 30.0
-    #: Probe body (the holder above the stem).
-    holder_radius: float = 12.0
-    holder_length: float = 40.0
+    shaft_radius: float = 0.75
+    shaft_length: float = 30.0
+    star: bool = False
+    arm_length: float = 22.0
+    #: Which ball is the tool centre point: the bottom one or an arm of a star.
+    tip: str = "down"
+    # -- behaviour
+    #: Amplitude of the three-lobe pre-travel variation of a kinematic probe (micrometres).
+    lobing_um: float = 0.0
+    #: Extra random error of the probe itself (one standard deviation, micrometres).
+    repeatability_um: float = 0.0
+    #: Systematic error of a tool that is not qualified (one standard deviation, micrometres).
+    unqualified_um: float = 12.0
+    #: The magnetic stylus module breaks away in a crash instead of bending.
+    breakaway: bool = False
+    #: Speed of the final approach in mm/s; ``None`` uses the ``PtMeasPar`` speed of the protocol.
+    touch_speed: float | None = None
+    #: Scanning points per second (``scanning`` mode).
+    scan_rate: float = 0.0
+    # -- optical sensors: ``laser`` (line), ``point_laser``, ``area`` (structured light), ``camera``
+    standoff: float = 60.0
+    depth_range: float = 30.0
+    #: Width of the line, or of the field of an area sensor or camera (mm).
+    line_width: float = 30.0
+    field_height: float = 22.0
+    points_per_line: int = 320
+    line_pitch: float = 1.0
+    #: Noise at the stand-off looking straight at the surface (micrometres, one sigma).
+    noise_um: float = 3.0
+    dropout: float = 0.005
+    max_angle_deg: float = 75.0
+    triangulation_deg: float = 30.0
+    #: What the sensor delivers: ``RSL`` raw scan lines, ``GSL`` gridded, ``QSP`` averaged on the grid.
+    point_type: str = "RSL"
+    grid_pitch: float = 1.0
+    #: Where the tool waits in the rack, shared by the tips of one star; ``None`` is the name.
+    rack: str | None = None
     color: tuple[float, float, float] = (0.8, 0.1, 0.1)
     description: str = ""
 
+    def __post_init__(self) -> None:
+        if self.mode not in MODES:
+            raise ValueError(f"tool {self.name!r}: mode must be one of {', '.join(MODES)}")
+        if self.head not in HEADS:
+            raise ValueError(f"tool {self.name!r}: head must be one of {', '.join(HEADS)}")
+        if self.tip not in TIPS:
+            raise ValueError(f"tool {self.name!r}: tip must be one of {', '.join(TIPS)}")
+        if self.tip != "down" and not self.star:
+            raise ValueError(f"tool {self.name!r}: only a star stylus has side tips")
 
-#: Physical styli for the tools of :data:`pyippdme.simulation.classes.tool_class.TOOL_CATALOG`.
+    @property
+    def rack_key(self) -> str:
+        return self.rack or self.name
+
+
+def _star(name: str, tip: str) -> ToolSpec:
+    return ToolSpec(
+        name,
+        "touch",
+        "fixed",
+        ball_radius=1.0,
+        shaft_radius=0.9,
+        shaft_length=40.0,
+        star=True,
+        arm_length=22.0,
+        tip=tip,
+        lobing_um=0.4,
+        breakaway=True,
+        rack="Star",
+        color=(0.85, 0.25, 0.2),
+        description=f"5-way star stylus, tip {tip}",
+    )
+
+
+#: Probe systems for the tools of :data:`pyippdme.simulation.classes.tool_class.TOOL_CATALOG`
+#: and the ones the twin adds; the first four are the built-in tools of the simulation.
 DEFAULT_TOOLS: dict[str, ToolSpec] = {
-    "RefTool": ToolSpec("RefTool", 1.5, 0.75, 30.0, description="3 mm ruby ball, 30 mm stem"),
-    "RefTool2": ToolSpec(
-        "RefTool2", 3.0, 1.5, 50.0, color=(0.9, 0.5, 0.1), description="6 mm ruby ball, 50 mm stem"
-    ),
-    "AlignProbe": ToolSpec(
-        "AlignProbe",
-        2.0,
-        1.0,
-        40.0,
-        holder_radius=18.0,
-        holder_length=60.0,
-        color=(0.2, 0.5, 0.9),
-        description="4 mm ball on an indexing head",
-    ),
-    "NoTool": ToolSpec(
-        "NoTool", 0.0, 0.0, 0.0, holder_radius=8.0, holder_length=20.0, color=(0.5, 0.5, 0.5)
-    ),
+    t.name: t
+    for t in (
+        ToolSpec(
+            "RefTool",
+            ball_radius=1.5,
+            shaft_radius=0.75,
+            shaft_length=30.0,
+            lobing_um=0.4,
+            breakaway=True,
+            description="TP20-style kinematic probe on a fixed mount, 3 mm ball, 30 mm stem",
+        ),
+        ToolSpec(
+            "RefTool2",
+            ball_radius=3.0,
+            shaft_radius=1.5,
+            shaft_length=50.0,
+            lobing_um=0.5,
+            breakaway=True,
+            color=(0.9, 0.5, 0.1),
+            description="TP20-style kinematic probe, 6 mm ball, 50 mm stem",
+        ),
+        ToolSpec(
+            "AlignProbe",
+            head="continuous",
+            extension=50.0,
+            ball_radius=2.0,
+            shaft_radius=1.0,
+            shaft_length=40.0,
+            lobing_um=0.4,
+            breakaway=True,
+            color=(0.2, 0.5, 0.9),
+            description="TP20-style probe on a continuous 2-axis head, 4 mm ball, 50 mm extension",
+        ),
+        ToolSpec(
+            "NoTool",
+            mode="none",
+            ball_radius=0.0,
+            shaft_radius=0.0,
+            shaft_length=0.0,
+            probe_radius=9.0,
+            probe_length=15.0,
+            color=(0.5, 0.5, 0.5),
+            description="no probe mounted",
+        ),
+        _star("StarDown", "down"),
+        _star("StarXP", "+x"),
+        _star("StarXN", "-x"),
+        _star("StarYP", "+y"),
+        _star("StarYN", "-y"),
+        ToolSpec(
+            "IndexedTP200",
+            head="indexed",
+            extension=100.0,
+            probe_radius=11.0,
+            ball_radius=2.0,
+            shaft_radius=1.0,
+            shaft_length=40.0,
+            repeatability_um=0.1,
+            breakaway=True,
+            color=(0.3, 0.7, 0.4),
+            description="strain-gauge probe on a PH10-style head (7.5 degree steps), 100 mm extension",
+        ),
+        ToolSpec(
+            "ScanSP25",
+            mode="scanning",
+            head="indexed",
+            extension=50.0,
+            probe_radius=14.0,
+            probe_length=50.0,
+            ball_radius=1.5,
+            shaft_radius=0.8,
+            shaft_length=40.0,
+            scan_rate=2000.0,
+            repeatability_um=0.1,
+            unqualified_um=15.0,
+            color=(0.15, 0.55, 0.85),
+            description="SP25-style scanning probe on an indexing head, 3 mm ball",
+        ),
+        ToolSpec(
+            "RevoScan",
+            mode="scanning",
+            head="continuous",
+            extension=0.0,
+            probe_radius=14.0,
+            probe_length=60.0,
+            ball_radius=1.5,
+            shaft_radius=0.8,
+            shaft_length=50.0,
+            scan_rate=6000.0,
+            repeatability_um=0.1,
+            unqualified_um=8.0,
+            color=(0.1, 0.45, 0.8),
+            description="5-axis scanning head, qualified once for all angles",
+        ),
+        ToolSpec(
+            "RevoHeadTouch",
+            mode="head_touch",
+            head="continuous",
+            probe_radius=14.0,
+            probe_length=60.0,
+            ball_radius=1.0,
+            shaft_radius=0.7,
+            shaft_length=40.0,
+            touch_speed=60.0,
+            repeatability_um=0.2,
+            unqualified_um=8.0,
+            color=(0.1, 0.45, 0.8),
+            description="5-axis head touches: the head flicks the stylus out for fast points",
+        ),
+        ToolSpec(
+            "LaserLine",
+            mode="laser",
+            head="indexed",
+            probe_radius=0.0,
+            probe_length=95.0,
+            ball_radius=0.0,
+            shaft_radius=0.0,
+            shaft_length=0.0,
+            standoff=60.0,
+            depth_range=30.0,
+            line_width=30.0,
+            points_per_line=320,
+            color=(0.15, 0.15, 0.2),
+            description="laser line scanner on an indexing head",
+        ),
+        ToolSpec(
+            "LaserPoint",
+            mode="point_laser",
+            head="indexed",
+            probe_length=70.0,
+            ball_radius=0.0,
+            shaft_radius=0.0,
+            shaft_length=0.0,
+            standoff=30.0,
+            depth_range=10.0,
+            noise_um=1.0,
+            triangulation_deg=0.0,
+            color=(0.2, 0.2, 0.3),
+            description="confocal/laser point sensor: one distance per control point",
+        ),
+        ToolSpec(
+            "AreaScanner",
+            mode="area",
+            head="indexed",
+            probe_length=110.0,
+            ball_radius=0.0,
+            shaft_radius=0.0,
+            shaft_length=0.0,
+            standoff=150.0,
+            depth_range=60.0,
+            line_width=60.0,
+            field_height=45.0,
+            points_per_line=240,
+            noise_um=8.0,
+            color=(0.25, 0.2, 0.2),
+            description="structured-light scanner: a grid of points per shot",
+        ),
+        ToolSpec(
+            "Camera2D",
+            mode="camera",
+            head="indexed",
+            probe_length=90.0,
+            ball_radius=0.0,
+            shaft_radius=0.0,
+            shaft_length=0.0,
+            standoff=80.0,
+            depth_range=100.0,
+            line_width=30.0,
+            field_height=22.5,
+            points_per_line=400,
+            color=(0.2, 0.25, 0.2),
+            description="telecentric camera: the edges it sees, as a video measuring system",
+        ),
+    )
 }
 
 
@@ -240,20 +489,42 @@ def parse_manifest(data: dict[str, object], *, base: MachineSpec | None = None) 
         bad = set(c.moves_with) - set(AXES)
         if bad:
             raise ValueError(f"component {c.name!r}: unknown axes {sorted(bad)}")
-    tools = {
-        str(t["name"]): ToolSpec(
-            name=str(t["name"]),
-            ball_radius=float(t.get("ball_radius", 1.5)),
-            stem_radius=float(t.get("stem_radius", 0.75)),
-            stem_length=float(t.get("stem_length", 30.0)),
-            holder_radius=float(t.get("holder_radius", 12.0)),
-            holder_length=float(t.get("holder_length", 40.0)),
-            color=_vec(t.get("color"), (0.8, 0.1, 0.1)) or (0.8, 0.1, 0.1),
-            description=str(t.get("description", "")),
-        )
-        for t in data.get("tool", [])  # type: ignore[attr-defined]
-    }
+    tools = {str(t["name"]): _parse_tool(t) for t in data.get("tool", [])}  # type: ignore[attr-defined]
     return MachineManifest(spec, components, tools, _vec(data.get("origin")))
+
+
+_TOOL_FIELDS = {f.name for f in fields(ToolSpec)}
+
+
+def _parse_tool(t: dict[str, object]) -> ToolSpec:
+    """Read one ``[[tool]]``; anything not given keeps the default of ``ToolSpec``."""
+    unknown = set(t) - _TOOL_FIELDS
+    if unknown:
+        raise ValueError(f"tool {t.get('name')!r}: unknown keys {', '.join(sorted(unknown))}")
+    values: dict[str, object] = dict(t)
+    if "color" in values:
+        values["color"] = _vec(values["color"])
+    return ToolSpec(**values)  # type: ignore[arg-type]
+
+
+def tool_to_toml(tool: ToolSpec) -> list[str]:
+    """Write the fields of ``tool`` that differ from the defaults as a ``[[tool]]`` table."""
+    default = ToolSpec(tool.name)
+    lines = ["[[tool]]", f'name = "{tool.name}"']
+    for f in fields(ToolSpec):
+        value = getattr(tool, f.name)
+        if f.name == "name" or value == getattr(default, f.name):
+            continue
+        if isinstance(value, bool):
+            text = str(value).lower()
+        elif isinstance(value, str):
+            text = f'"{value}"'
+        elif isinstance(value, tuple):
+            text = "[" + ", ".join(str(v) for v in value) + "]"
+        else:
+            text = str(value)
+        lines.append(f"{f.name} = {text}")
+    return lines
 
 
 def load_manifest(path: str | Path) -> MachineManifest:
@@ -303,12 +574,5 @@ def manifest_to_toml(manifest: MachineManifest) -> str:
         if not c.collides:
             lines.append("collides = false")
     for t in manifest.tools.values():
-        lines += [
-            "",
-            "[[tool]]",
-            f'name = "{t.name}"',
-            f"ball_radius = {t.ball_radius}",
-            f"stem_radius = {t.stem_radius}",
-            f"stem_length = {t.stem_length}",
-        ]
+        lines += ["", *tool_to_toml(t)]
     return "\n".join(lines) + "\n"
