@@ -138,4 +138,9 @@ def speed_line(block: str, parameter: str, value: float) -> str:
 
 def status_lines() -> list[str]:
     """List what a front end polls for its status bar: the position and the error state."""
-    return [_line("Get", builders.get("X", "Y", "Z")), "GetXtdErrStatus()"]
+    return [
+        _line("Get", builders.get("X", "Y", "Z")),
+        "GetXtdErrStatus()",
+        "IsUserEnabled()",
+        _line("GetProp", builders.get_prop("Tool.Name")),
+    ]

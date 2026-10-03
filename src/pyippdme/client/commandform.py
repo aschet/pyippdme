@@ -25,12 +25,160 @@ from pyippdme.server.catalog import CommandInfo
 from pyippdme.simulation.catalog import BUILTIN_COMMANDS
 
 __all__ = [
+    "COMMAND_GROUPS",
     "FormField",
     "build_command_line",
     "command_fields",
     "command_names",
+    "grouped_commands",
     "result_rows",
 ]
+
+#: The commands by the class of the object model that defines them (Figure 1, chapter 6).
+COMMAND_GROUPS: dict[str, tuple[str, ...]] = {
+    "Session and errors": (
+        "StartSession",
+        "EndSession",
+        "AbortE",
+        "ClearAllErrors",
+        "GetErrStatusE",
+        "GetXtdErrStatus",
+        "GetErrorInfo",
+        "StopDaemon",
+        "StopAllDaemons",
+        "EnumNameSpaces",
+    ),
+    "Properties": ("GetProp", "GetPropE", "SetProp", "EnumProp", "EnumAllProp"),
+    "Machine": (
+        "GetDMEVersion",
+        "GetSupportedCommands",
+        "GetSupportedArguments",
+        "GetMachineClass",
+        "Home",
+        "IsHomed",
+        "EnableUser",
+        "DisableUser",
+        "IsUserEnabled",
+        "EnumerateMoverAxes",
+    ),
+    "Move": (
+        "GoTo",
+        "Step",
+        "GoToOnCircle",
+        "GoToOnSpiral",
+        "Get",
+        "OnMoveReport",
+        "OnMoveReportE",
+        "LockAxis",
+        "LockPosition",
+    ),
+    "Coordinate systems": (
+        "SetCoordSystem",
+        "GetCoordSystem",
+        "SetCsyTransformation",
+        "GetCsyTransformation",
+        "SaveNamedCsyTransformation",
+        "GetNamedCsyTransformation",
+        "SaveActiveCoordSystem",
+        "LoadCoordSystem",
+        "DeleteCoordSystem",
+        "EnumCoordSystems",
+        "EnableRotaryTableVarCsy",
+        "AlignPart",
+    ),
+    "Temperature": (
+        "GetTemperatureSensors",
+        "ReadTemperatureSensor",
+        "ReadAllTemperatures",
+        "UpdateScaleTemperatures",
+        "SetScaleTemperatures",
+        "GetScaleTemperatures",
+        "SetTemperatureCompensationOrigin",
+    ),
+    "Measure a point": (
+        "OnPtMeasReport",
+        "PtMeas",
+        "PtMeasPar",
+        "PtMeasSelfCenter",
+        "PtMeasSelfCenterLocked",
+    ),
+    "Scan": (
+        "OnScanReport",
+        "ScanPar",
+        "ScanOnLine",
+        "ScanOnCircle",
+        "ScanOnHelix",
+        "ScanOnCurve",
+        "ScanOnLineHint",
+        "ScanOnCircleHint",
+        "ScanOnCurveHint",
+        "ScanOnCurveDensity",
+        "ScanUnknownHint",
+        "ScanUnknownDensity",
+        "ScanInPlaneEndIsSphere",
+        "ScanInPlaneEndIsPlane",
+        "ScanInPlaneEndIsCyl",
+        "ScanInCylEndIsSphere",
+        "ScanInCylEndIsPlane",
+    ),
+    "Tool": (
+        "Tool",
+        "GoToPar",
+        "OptPar",
+        "IsAlignable",
+        "AlignTool",
+        "AvrRadius",
+        "CalcToolAlignment",
+        "CalcToolAngles",
+        "UseSmallestAngletoAlignTool",
+        "ReQualify",
+        "EnableOptimize",
+        "DisableOptimize",
+        "IsOptimizeEnabled",
+    ),
+    "Tool changer": (
+        "EnumTools",
+        "ChangeTool",
+        "FindTool",
+        "FoundTool",
+        "SetTool",
+        "GetChangeToolAction",
+        "EnumToolCollection",
+        "EnumAllToolCollections",
+        "OpenToolCollection",
+    ),
+    "Optical and raw data": (
+        "DataAcquire",
+        "DeleteAcquistion",
+        "DeleteAllAcquisitions",
+        "AdvDataStruct",
+        "RawDataBinSetup",
+        "GetRawDataBin",
+        "GetRawDataShaMem",
+        "ReleaseShaMem",
+        "GetRawDataFile",
+        "DelRawDataFile",
+    ),
+    "Form tester": ("CenterPart", "TiltPart", "TiltCenterPart"),
+}
+
+
+def grouped_commands(
+    catalog: Mapping[str, CommandInfo] = BUILTIN_COMMANDS,
+) -> dict[str, list[str]]:
+    """Return the commands of ``catalog`` by group; those not in a group go to ``Other``."""
+    available = set(catalog)
+    groups: dict[str, list[str]] = {}
+    placed: set[str] = set()
+    for group, names in COMMAND_GROUPS.items():
+        found = [n for n in names if n in available]
+        if found:
+            groups[group] = found
+            placed.update(found)
+    rest = sorted(available - placed)
+    if rest:
+        groups["Other"] = rest
+    return groups
 
 
 @dataclass(frozen=True, slots=True)

@@ -73,16 +73,20 @@ def test_recipes_and_forms_build_valid_commands() -> None:
 
 def test_dialogs_measure_and_the_status_bar_follows(window: ClientWindow) -> None:
     window.connect_virtual()
-    _wait(lambda: window.host.connected and "Connected" in window.connection_label.text())
+    _wait(lambda: window.host.connected and "Connected" in window.connection_label.text)
     window.send("Home()")
-    _wait(lambda: "Homed" in window.homed_label.text() and "Not" not in window.homed_label.text())
+    _wait(lambda: window.homed_label.text == "Homed")
     window.send("EnableUser()")
+    _wait(lambda: window.user_led.state == "on")
+    assert window.tool_label.text() == "Tool: RefTool"
+    assert window.session_led.state == "on"
 
     move = window.open_dialog("move")
     move._axes["X"][1].setValue(40.0)  # type: ignore[attr-defined]
     move._axes["Y"][1].setValue(30.0)  # type: ignore[attr-defined]
     move._axes["Z"][1].setValue(20.0)  # type: ignore[attr-defined]
     move.run_button.click()
+    _wait(lambda: move.outcome.text().startswith("Done"))
     _wait(lambda: window.position is not None and abs(window.position[0] - 40.0) < 1e-6)
     assert "40.000" in window.position_label.text()
 
@@ -103,17 +107,17 @@ def test_dialogs_measure_and_the_status_bar_follows(window: ClientWindow) -> Non
 
 def test_errors_show_in_the_status_bar(window: ClientWindow) -> None:
     window.connect_virtual()
-    _wait(lambda: window.host.connected and window.homed_label.text() != "")  # session started
+    _wait(lambda: window.host.connected and window.homed_label.text != "")  # session started
     window.send("NoSuchCommand()")
-    _wait(lambda: "Error" in window.error_label.text())
-    assert "Error" in window.log.toPlainText()
+    _wait(lambda: window.error_label.text().startswith("Error"))
+    assert "NoSuchCommand" in window.log.toPlainText()
     window.send("GetErrStatusE()")
     _wait(lambda: not window.error_label.text())
 
 
 def test_optical_dialog_acquires_points_into_the_cloud_view(window: ClientWindow) -> None:
     window.connect_virtual()
-    _wait(lambda: window.host.connected and window.homed_label.text() != "")
+    _wait(lambda: window.host.connected and window.homed_label.text != "")
     dialog = window.open_dialog("optical")
     dialog.info_requested.emit()  # type: ignore[attr-defined]
     _wait(lambda: "raw data" in dialog.info.text())  # type: ignore[attr-defined]
@@ -127,3 +131,33 @@ def test_optical_dialog_acquires_points_into_the_cloud_view(window: ClientWindow
     assert not image.isNull()
     assert "XYZ" not in window._cloud_csv()
     assert window._cloud_csv().startswith("x,y,z")
+
+
+def test_commands_are_grouped_and_the_log_is_numbered(window: ClientWindow) -> None:
+    tree = window.command_list
+    groups = [tree.topLevelItem(i).text(0) for i in range(tree.topLevelItemCount())]  # type: ignore[union-attr]
+    assert "Measure a point" in groups
+    assert tree.topLevelItem(0).childCount() > 0  # type: ignore[union-attr]
+    window.command_filter.setText("PtMeas")
+    shown = [
+        tree.topLevelItem(i).text(0)  # type: ignore[union-attr]
+        for i in range(tree.topLevelItemCount())
+        if not tree.topLevelItem(i).isHidden()  # type: ignore[union-attr]
+    ]
+    assert shown == ["Measure a point"]
+    window.connect_virtual()
+    _wait(lambda: window.session_led.state == "on")
+    window.send("GetProp(Tool.Name())")
+    _wait(lambda: "#2 done in" in window.log.toPlainText())
+    text = window.log.toPlainText()
+    assert "#1 > StartSession()" in text
+    assert "#2 > GetProp(Tool.Name())" in text
+    _wait(lambda: window.busy_led.text == "Ready")
+
+
+def test_dialog_shows_a_failure_and_not_connected_is_explained(window: ClientWindow) -> None:
+    move = window.open_dialog("move")
+    move.run_button.click()
+    assert move.outcome.text().startswith("Failed")
+    assert "Not connected" in window.log.toPlainText()
+    assert not window.abort_button.isEnabled()

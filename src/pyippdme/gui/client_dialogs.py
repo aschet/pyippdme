@@ -98,7 +98,9 @@ class TaskDialog(QDialog):
         self.preview.setFont(self.font())
         outer.addWidget(self.preview)
         row = QHBoxLayout()
-        row.addStretch(1)
+        self.outcome = QLabel("")
+        self.outcome.setWordWrap(True)
+        row.addWidget(self.outcome, 1)
         self.run_button = QPushButton(load_icon("run"), "Run")
         self.run_button.setDefault(True)
         self.run_button.clicked.connect(self._run)
@@ -121,6 +123,18 @@ class TaskDialog(QDialog):
 
     def _run(self) -> None:
         self.run_requested.emit(self.lines())
+
+    def set_busy(self) -> None:
+        """Show that the commands of this dialog are running."""
+        self.run_button.setEnabled(False)
+        self.outcome.setStyleSheet("color: #7f8c8d;")
+        self.outcome.setText("Running ...")
+
+    def set_result(self, ok: bool, text: str) -> None:
+        """Show how the commands of this dialog ended."""
+        self.outcome.setStyleSheet("color: #27ae60;" if ok else "color: #e74c3c;")
+        self.outcome.setText(("Done. " if ok else "Failed: ") + text)
+        self.refresh()
 
     def showEvent(self, event: object) -> None:  # noqa: N802
         self.refresh()

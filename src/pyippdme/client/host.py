@@ -104,6 +104,31 @@ class ClientHost:
 
         return self.submit(go())
 
+    def run_lines(
+        self, lines: list[str], on_event: Callable[[int, str, CommandEvent], None]
+    ) -> Future[bool]:
+        """Send the lines one after the other; ``on_event`` also gets the index of the line.
+
+        Stops at the first error and returns whether all lines succeeded. Different calls may
+        overlap, so a long move does not block ``AbortE``.
+        """
+        from pyippdme.client.interaction import Failed, ParseFailed
+
+        async def go() -> bool:
+            client = self._client
+            if client is None:
+                raise RuntimeError("not connected")
+            for index, text in enumerate(lines):
+                async for event in run_command_line(client, text):
+                    on_event(index, text, event)
+                    if isinstance(event, ConnectionLost):
+                        self._client = None
+                    if isinstance(event, ConnectionLost | Failed | ParseFailed):
+                        return False
+            return True
+
+        return self.submit(go())
+
     def sensor_info(self) -> Future[SensorInfo]:
         """Return the active tool and how its raw data is delivered."""
 

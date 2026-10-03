@@ -484,13 +484,18 @@ Icon buttons open dialogs that build the commands for you: **Move** (`GoTo` or `
 **Point** (`PtMeas` with the probing direction), **Line scan** and **Circle / helix** scan,
 **Tools** (list the tools, `ChangeTool` or `SetTool`), **Speeds** (`GoToPar`, `PtMeasPar`,
 `ScanPar`) and **Optical** (read the sensor, then `DataAcquire` and the point transfer; the
-points appear in a 3D point cloud view that can be copied as CSV or saved as `.xyz`). Home,
-Enable and Abort are toolbar buttons. Every command of the protocol also has a form (the
-**All commands** panel), and there is a command line with history and a script runner.
+points appear in a 3D point cloud view that can be copied as CSV or saved as `.xyz`). A dialog
+shows whether its run is still going, how long it took, or the server's error. Every command of
+the protocol also has a form (the **All commands** panel, grouped by task), and there is a
+command line with history and a script runner.
 
-The status bar follows the machine: the position from every response that carries `X`, `Y`
-and `Z` and a short poll, the homing state, and errors: a failed command shows its number and
-text, and an active machine error shows with a button that sends `ClearAllErrors()`.
+A strip above the log follows the machine: lamps for connection, session, homed, user enabled
+and busy, the tool, and the position (from every response with `X`, `Y` and `Z` and a short
+poll). Errors show in the status bar with a button that sends `ClearAllErrors()`. Every command
+is numbered in the log (`#7 > GoTo(...)`, `#7 done in 0.35 s`). The red **Abort** button (Esc)
+works during a move. Shortcuts: F5 connect, Ctrl+Shift+V virtual CMM, Ctrl+1..7 the dialogs,
+Ctrl+L the command line. [The UX analysis](ux-analysis.md) lists what was found and changed in
+this window and in the simulator.
 
 The window holds no protocol logic. `pyippdme.client.host.ClientHost` runs the connection on
 a thread (commands may overlap, so `AbortE` works during a move), `pyippdme.client.recipes`
@@ -595,4 +600,5 @@ instead of falling back to "0506 Argument not supported".
 :hidden:
 
 api
+ux-analysis
 ```

@@ -15,12 +15,13 @@ from __future__ import annotations
 import csv
 import html
 import io
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QGuiApplication, QKeyEvent
+from PySide6.QtGui import QAction, QGuiApplication, QKeyEvent, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QCompleter,
@@ -30,14 +31,16 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QMainWindow,
     QPushButton,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QTextEdit,
     QToolBar,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -57,6 +60,7 @@ from pyippdme.client.report import report_from_payload
 from pyippdme.gui import client_dialogs as dialogs
 from pyippdme.gui.icons import app_icon, load_icon
 from pyippdme.gui.pointcloud import PointCloudView
+from pyippdme.gui.widgets import Led, icon_button, mono, separator
 from pyippdme.protocol.ast import (
     BasicName,
     DataPayload,
@@ -71,15 +75,16 @@ from pyippdme.types.vec3 import Vec3
 
 _POLL_MS = 400
 _LOG_LIMIT = 5000
-_STATUS_TEXTS = frozenset(recipes.status_lines())
+_STATUS_BATCH = 0  # the id of the background status poll; user batches count up from 1
 
 
 class _Bridge(QObject):
     """Hands what the client thread reports over to the GUI thread."""
 
-    data = Signal(str, object)
+    data = Signal(int, int, str, object)  # batch, line index, command text, event
     finished = Signal(object, str)  # a Future's exception (or None), what it was for
     result = Signal(object, str)  # a Future's result, what it was for
+    batch_done = Signal(int, object, object)  # batch, exception (or None), all lines succeeded
 
 
 class _HistoryLine(QLineEdit):
@@ -105,6 +110,18 @@ class _HistoryLine(QLineEdit):
             self.setText(self.history[self._index] if self._index < len(self.history) else "")
         else:
             super().keyPressEvent(event)
+
+
+class _Batch:
+    """The command lines of one click, with the bookkeeping to log them in order."""
+
+    def __init__(self, lines: list[str], first_number: int, origin: dialogs.TaskDialog | None):
+        self.lines = lines
+        self.first_number = first_number
+        self.origin = origin
+        self.started: dict[int, float] = {}
+        self.begin = time.monotonic()
+        self.error = ""
 
 
 def _table(headers: list[str]) -> QTableWidget:
@@ -139,10 +156,13 @@ class ClientWindow(QMainWindow):
         self._bridge.data.connect(self._on_event)
         self._bridge.finished.connect(self._on_finished)
         self._bridge.result.connect(self._on_result)
+        self._bridge.batch_done.connect(self._on_batch_done)
         self._polling = False
-        self._echoed = ""
-        self._queries: dict[str, Callable[[list[DataPayload]], None]] = {}
-        self._collected: dict[str, list[DataPayload]] = {}
+        self._next_batch = 1
+        self._next_number = 1
+        self._batches: dict[int, _Batch] = {}
+        self._queries: dict[tuple[int, int], Callable[[list[DataPayload]], None]] = {}
+        self._collected: dict[tuple[int, int], list[DataPayload]] = {}
         self._dialogs: dict[str, dialogs.TaskDialog] = {}
         self.setWindowTitle("pyippdme command client")
         self.setWindowIcon(app_icon())
@@ -155,13 +175,23 @@ class ClientWindow(QMainWindow):
         self._timer.timeout.connect(self._poll)
         self._timer.start(_POLL_MS)
         self._update_connection_state()
+        self._append(
+            "Not connected. Type the address of an I++ DME server and press Connect (F5), "
+            "or press Virtual CMM (Ctrl+Shift+V) to try the client without a machine.",
+            "info",
+        )
 
     # -- construction ---------------------------------------------------------------------
 
-    def _action(self, text: str, icon: str, slot: Callable[[], Any], tip: str = "") -> QAction:
+    def _action(
+        self, text: str, icon: str, slot: Callable[[], Any], tip: str = "", shortcut: str = ""
+    ) -> QAction:
         action = QAction(load_icon(icon), text, self)
-        action.setToolTip(tip or text)
+        action.setToolTip(f"{tip or text} ({shortcut})" if shortcut else tip or text)
+        if shortcut:
+            action.setShortcut(QKeySequence(shortcut))
         action.triggered.connect(lambda _=False: slot())
+        self.addAction(action)  # shortcuts work wherever the focus is
         return action
 
     def _build_toolbars(self) -> None:
@@ -170,6 +200,7 @@ class ClientWindow(QMainWindow):
         self.addToolBar(bar)
         self.host_edit = QLineEdit("127.0.0.1")
         self.host_edit.setFixedWidth(150)
+        self.host_edit.returnPressed.connect(self.toggle_connection)
         self.port_spin = QSpinBox()
         self.port_spin.setRange(1, 65535)
         self.port_spin.setValue(DEFAULT_PORT)
@@ -177,9 +208,15 @@ class ClientWindow(QMainWindow):
         bar.addWidget(self.host_edit)
         bar.addWidget(QLabel(" : "))
         bar.addWidget(self.port_spin)
-        self.connect_action = self._action("Connect", "connect", self.toggle_connection)
+        self.connect_action = self._action(
+            "Connect", "connect", self.toggle_connection, "Connect to the server", "F5"
+        )
         self.virtual_action = self._action(
-            "Virtual CMM", "virtual", self.connect_virtual, "Start a virtual CMM in this program"
+            "Virtual CMM",
+            "virtual",
+            self.connect_virtual,
+            "Start a virtual CMM in this program",
+            "Ctrl+Shift+V",
         )
         bar.addAction(self.connect_action)
         bar.addAction(self.virtual_action)
@@ -197,9 +234,9 @@ class ClientWindow(QMainWindow):
             "Home", "home", lambda: self.send("Home()"), "Home the machine"
         )
         self.abort_action = self._action(
-            "Abort", "abort", lambda: self.send("AbortE()"), "AbortE: stop the current motion"
+            "Abort", "abort", lambda: self.send("AbortE()"), "AbortE: stop the motion", "Esc"
         )
-        for action in (self.enable_action, self.home_action, self.abort_action):
+        for action in (self.enable_action, self.home_action):
             machine.addAction(action)
 
         tasks = QToolBar("Measure")
@@ -207,23 +244,38 @@ class ClientWindow(QMainWindow):
         tasks.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.addToolBar(tasks)
         self.task_actions = [
-            self._action("Move", "goto", lambda: self.open_dialog("move"), "Move to a position"),
-            self._action("Point", "point", lambda: self.open_dialog("point"), "Measure a point"),
-            self._action("Line scan", "line", lambda: self.open_dialog("line"), "Scan a line"),
+            self._action(
+                "Move", "goto", lambda: self.open_dialog("move"), "Move to a position", "Ctrl+1"
+            ),
+            self._action(
+                "Point", "point", lambda: self.open_dialog("point"), "Measure a point", "Ctrl+2"
+            ),
+            self._action(
+                "Line scan", "line", lambda: self.open_dialog("line"), "Scan a line", "Ctrl+3"
+            ),
             self._action(
                 "Circle / helix",
                 "circle",
                 lambda: self.open_dialog("arc"),
                 "Scan a circle or helix",
+                "Ctrl+4",
             ),
             self._action(
-                "Tools", "tool", lambda: self.open_dialog("tool"), "Change or select tool"
+                "Tools", "tool", lambda: self.open_dialog("tool"), "Change or select tool", "Ctrl+5"
             ),
             self._action(
-                "Speeds", "speed", lambda: self.open_dialog("speed"), "Speeds and accelerations"
+                "Speeds",
+                "speed",
+                lambda: self.open_dialog("speed"),
+                "Speeds and accelerations",
+                "Ctrl+6",
             ),
             self._action(
-                "Optical", "optical", lambda: self.open_dialog("optical"), "Acquire with the sensor"
+                "Optical",
+                "optical",
+                lambda: self.open_dialog("optical"),
+                "Acquire with the sensor",
+                "Ctrl+7",
             ),
         ]
         for action in self.task_actions:
@@ -240,18 +292,26 @@ class ClientWindow(QMainWindow):
                 "Save commands", "save", self.save_history, "Save the commands sent so far"
             )
         )
-        files.addAction(self._action("Clear log", "clear", self.clear_log))
+        files.addAction(self._action("Clear log", "clear", self.clear_log, "Clear the log"))
+        self.focus_action = self._action(
+            "Command line", "run", lambda: self.command_line.setFocus(), "Type a command", "Ctrl+L"
+        )
 
     def _build_central(self) -> None:
         central = QWidget()
         layout = QVBoxLayout(central)
+        self.strip = QWidget()
+        self._build_strip(self.strip)
+        layout.addWidget(self.strip)
         self.log = QTextEdit()
         self.log.setReadOnly(True)
         self.log.setFontFamily("monospace")
         layout.addWidget(self.log, 1)
         row = QHBoxLayout()
         self.command_line = _HistoryLine()
-        self.command_line.setPlaceholderText("Command, e.g. GoTo(X(10),Y(20))   (Up/Down: history)")
+        self.command_line.setPlaceholderText(
+            "Command, e.g. GoTo(X(10),Y(20))   (Up/Down: history, Ctrl+L: focus)"
+        )
         completer = QCompleter(commandform.command_names())
         completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.command_line.setCompleter(completer)
@@ -263,6 +323,41 @@ class ClientWindow(QMainWindow):
         layout.addLayout(row)
         self.setCentralWidget(central)
 
+    def _build_strip(self, strip: QWidget) -> None:
+        """Lamps for the connection and the machine, the tool and a large position read-out."""
+        layout = QHBoxLayout(strip)
+        layout.setContentsMargins(4, 2, 4, 2)
+        self.connection_label = Led("Not connected", "The link to the server")
+        self.session_led = Led("No session", "StartSession has to be accepted by the server")
+        self.homed_label = Led("", "Whether the machine is homed")
+        self.user_led = Led("User disabled", "EnableUser lets the program move the machine")
+        self.busy_led = Led("Ready", "Commands that are still running")
+        self.tool_label = QLabel("")
+        self.position_label = QLabel("X -   Y -   Z -")
+        mono(self.position_label, 15)
+        for widget in (
+            self.connection_label,
+            self.session_led,
+            separator(),
+            self.homed_label,
+            self.user_led,
+            separator(),
+            self.busy_led,
+        ):
+            layout.addWidget(widget)
+        layout.addWidget(separator())
+        layout.addWidget(self.tool_label)
+        layout.addStretch(1)
+        layout.addWidget(self.position_label)
+        self.abort_button = icon_button("abort", "Abort", "AbortE: stop the motion (Esc)")
+        self.abort_button.setStyleSheet(
+            "QPushButton { background: #c0392b; color: white; font-weight: bold;"
+            " padding: 4px 10px; }"
+            "QPushButton:disabled { background: #7f8c8d; }"
+        )
+        self.abort_button.clicked.connect(self.abort_action.trigger)
+        layout.addWidget(self.abort_button)
+
     def _dock(self, title: str, widget: QWidget, area: Qt.DockWidgetArea) -> QDockWidget:
         dock = QDockWidget(title, self)
         dock.setWidget(widget)
@@ -270,20 +365,32 @@ class ClientWindow(QMainWindow):
         return dock
 
     def _build_docks(self) -> None:
-        # Every command of the protocol, with a form for its arguments.
+        # Every command of the protocol, grouped by task, with a form for its arguments.
         panel = QWidget()
         box = QVBoxLayout(panel)
         self.command_filter = QLineEdit()
         self.command_filter.setPlaceholderText("Search commands")
         self.command_filter.setClearButtonEnabled(True)
-        self.command_list = QListWidget()
-        self.command_list.addItems(commandform.command_names())
+        self.command_list = QTreeWidget()
+        self.command_list.setHeaderHidden(True)
+        for group, names in commandform.grouped_commands().items():
+            parent = QTreeWidgetItem([group])
+            font = parent.font(0)
+            font.setBold(True)
+            parent.setFont(0, font)
+            parent.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.command_list.addTopLevelItem(parent)
+            for name in names:
+                QTreeWidgetItem(parent, [name])
         self.command_filter.textChanged.connect(self._filter_commands)
-        self.command_list.currentTextChanged.connect(self._show_command_form)
+        self.command_list.currentItemChanged.connect(
+            lambda item, _: self._show_command_form(self._command_of(item))
+        )
+        self.command_list.itemDoubleClicked.connect(lambda *_: self._build_from_form(send=False))
         self.form_host = QWidget()
         self.form_layout = QFormLayout(self.form_host)
         self.form_edits: dict[str, QLineEdit] = {}
-        self.form_status = QLabel()
+        self.form_status = QLabel("Pick a command to fill in its arguments.")
         self.form_status.setWordWrap(True)
         build = QPushButton(load_icon("script"), "Copy to command line")
         build.clicked.connect(lambda: self._build_from_form(send=False))
@@ -299,6 +406,8 @@ class ClientWindow(QMainWindow):
         box.addLayout(buttons)
         self._dock("All commands", panel, Qt.DockWidgetArea.LeftDockWidgetArea)
 
+        # Results on the right, as tabs: the table of points, the cloud, the last response.
+        self.tabs = QTabWidget()
         points = QWidget()
         pbox = QVBoxLayout(points)
         self.points = _table(["#", "X", "Y", "Z", "From"])
@@ -311,7 +420,7 @@ class ClientWindow(QMainWindow):
         prow.addWidget(copy)
         prow.addWidget(wipe)
         pbox.addLayout(prow)
-        self._dock("Measured points", points, Qt.DockWidgetArea.RightDockWidgetArea)
+        self.tabs.addTab(points, load_icon("point"), "Points")
 
         cloud = QWidget()
         cbox = QVBoxLayout(cloud)
@@ -328,25 +437,21 @@ class ClientWindow(QMainWindow):
             button.clicked.connect(lambda _=False, f=slot: f())
             crow.addWidget(button)
         cbox.addLayout(crow)
-        self.cloud_dock = self._dock("Point cloud", cloud, Qt.DockWidgetArea.RightDockWidgetArea)
+        self.cloud_tab = cloud
+        self.tabs.addTab(cloud, load_icon("optical"), "Point cloud")
 
         self.response = _table(["Name", "Value"])
-        self._dock("Last response", self.response, Qt.DockWidgetArea.RightDockWidgetArea)
+        self.tabs.addTab(self.response, load_icon("script"), "Last response")
+        self._dock("Results", self.tabs, Qt.DockWidgetArea.RightDockWidgetArea)
 
     def _build_status_bar(self) -> None:
         bar = self.statusBar()
-        self.connection_label = QLabel()
-        self.position_label = QLabel("Position: -")
-        self.position_label.setFont(self.log.font())
-        self.homed_label = QLabel()
         self.error_label = QLabel()
-        self.error_label.setStyleSheet("color: #e74c3c;")
+        self.error_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
         self.error_label.setTextFormat(Qt.TextFormat.PlainText)
         self.clear_errors = QPushButton(load_icon("clear"), "Clear errors")
         self.clear_errors.setFlat(True)
         self.clear_errors.clicked.connect(lambda: self.send("ClearAllErrors()"))
-        for w in (self.connection_label, self.position_label, self.homed_label):
-            bar.addPermanentWidget(w)
         bar.addWidget(self.error_label, 1)
         bar.addPermanentWidget(self.clear_errors)
 
@@ -359,13 +464,13 @@ class ClientWindow(QMainWindow):
         if self.host.connected:
             self._watch(self.host.disconnect(), "disconnect")
             return
-        self._append(f"Connecting to {self.host_edit.text()}:{self.port_spin.value()} …", "info")
+        self._append(f"Connecting to {self.host_edit.text()}:{self.port_spin.value()} ...", "info")
         self._watch(self.host.connect(self.host_edit.text(), self.port_spin.value()), "connect")
 
     def connect_virtual(self) -> None:
         if self.host.connected:
             self._watch(self.host.disconnect(), "disconnect")
-        self._append("Starting a virtual CMM …", "info")
+        self._append("Starting a virtual CMM ...", "info")
         self._watch(self.host.connect_embedded(), "connect")
 
     def _on_finished(self, error: object, what: str) -> None:
@@ -387,32 +492,56 @@ class ClientWindow(QMainWindow):
         self.connect_action.setIcon(load_icon("disconnect" if connected else "connect"))
         for action in (self.enable_action, self.home_action, self.abort_action, *self.task_actions):
             action.setEnabled(connected)
+        self.abort_button.setEnabled(connected)
         self.host_edit.setEnabled(not connected)
         self.port_spin.setEnabled(not connected)
-        self.connection_label.setText(
-            ("  Connected" + (" (virtual CMM)" if self.host.embedded else ""))
-            if connected
-            else "  Not connected"
-        )
-        if not connected:
-            self.position_label.setText("Position: -")
-            self.homed_label.clear()
+        if connected:
+            self.connection_label.set_state(
+                "on", "Connected" + (" (virtual CMM)" if self.host.embedded else "")
+            )
+            return
+        self.connection_label.set_state("off", "Not connected")
+        self.session_led.set_state("off", "No session")
+        self.homed_label.set_state("off", "")
+        self.user_led.set_state("off", "User disabled")
+        self.busy_led.set_state("off", "Ready")
+        self.tool_label.clear()
+        self.position_label.setText("X -   Y -   Z -")
 
     # -- sending ----------------------------------------------------------------------------
 
     def send(self, text: str) -> None:
         self.send_lines([text])
 
-    def send_lines(self, lines: list[str]) -> None:
+    def send_lines(self, lines: list[str], origin: dialogs.TaskDialog | None = None) -> int:
+        """Run the lines one after the other; return the id of the batch (0 if not sent)."""
         if not self.host.connected:
-            self._append("Not connected", "error")
-            return
+            self._append("Not connected: connect to a server first (F5).", "error")
+            if origin is not None:
+                origin.set_result(False, "not connected")
+            return 0
         for line in lines:
             self.command_line.remember(line)
-        self._watch(self.host.run_sequence(lines, self._relay), "command")
+        batch_id = self._next_batch
+        self._next_batch += 1
+        self._batches[batch_id] = _Batch(lines, self._next_number, origin)
+        self._next_number += len(lines)
+        if origin is not None:
+            origin.set_busy()
+        self._submit(batch_id, lines)
+        self._update_busy()
+        return batch_id
 
-    def _relay(self, text: str, event: object) -> None:
-        self._bridge.data.emit(text, event)
+    def _submit(self, batch_id: int, lines: list[str]) -> None:
+        def relay(index: int, text: str, event: object) -> None:
+            self._bridge.data.emit(batch_id, index, text, event)
+
+        def done(f: Any) -> None:
+            self._bridge.batch_done.emit(
+                batch_id, f.exception(), None if f.exception() else f.result()
+            )
+
+        self.host.run_lines(lines, relay).add_done_callback(done)
 
     def _send_typed(self) -> None:
         text = self.command_line.text().strip()
@@ -422,8 +551,36 @@ class ClientWindow(QMainWindow):
 
     def query(self, text: str, callback: Callable[[list[DataPayload]], None]) -> None:
         """Run ``text`` and hand its data responses to ``callback`` (on the GUI thread)."""
-        self._queries[text] = callback
-        self.send(text)
+        batch_id = self.send_lines([text])
+        if batch_id:
+            self._queries[(batch_id, 0)] = callback
+
+    def _update_busy(self) -> None:
+        if not self._batches:
+            self.busy_led.set_state("off", "Ready")
+            return
+        first = next(iter(self._batches.values()))
+        running = first.lines[max(0, min(len(first.started), len(first.lines)) - 1)]
+        more = len(self._batches) - 1
+        self.busy_led.set_state("on", f"Busy: {running}" + (f" (+{more})" if more else ""))
+
+    def _on_batch_done(self, batch_id: int, error: object, ok: object) -> None:
+        if batch_id == _STATUS_BATCH:
+            self._polling = False
+            return
+        batch = self._batches.pop(batch_id, None)
+        self._update_busy()
+        if batch is None:
+            return
+        if error is not None:
+            batch.error = str(error)
+            self._append(f"Failed: {error}", "error")
+        if batch.origin is not None:
+            took = time.monotonic() - batch.begin
+            batch.origin.set_result(error is None and bool(ok), batch.error or f"{took:.2f} s")
+        for key in [k for k in self._queries if k[0] == batch_id]:
+            self._queries.pop(key, None)
+            self._collected.pop(key, None)
 
     # -- showing results --------------------------------------------------------------------
 
@@ -440,51 +597,72 @@ class ClientWindow(QMainWindow):
         self.log.clear()
 
     def _show_error(self, text: str) -> None:
-        self.error_label.setText("⚠ " + text)
+        self.error_label.setText("Error: " + text)
         self.error_label.setToolTip(text)
 
-    def _on_event(self, text: str, event: object) -> None:
-        status = text in _STATUS_TEXTS
+    def _on_event(self, batch_id: int, index: int, text: str, event: object) -> None:
+        status = batch_id == _STATUS_BATCH
+        key = (batch_id, index)
         if isinstance(event, Received):
-            self._on_data(text, event.payload, status)
+            self._on_data(key, text, event.payload, status)
         if status and not isinstance(event, Failed | ConnectionLost):
             return
-        if text != self._echoed:
-            self._echoed = text
+        batch = self._batches.get(batch_id)
+        number = ""
+        if batch is not None:
+            if index not in batch.started:
+                batch.started[index] = time.monotonic()
+                self._append(f"#{batch.first_number + index} > {text}", "cmd")
+                self._update_busy()
+            number = f"#{batch.first_number + index} "
+        elif not status:
             self._append(f"> {text}", "cmd")
         match event:
             case ParseFailed(error):
-                self._append(f"Parse error: {error}", "error")
+                self._append(f"{number}Parse error: {error}", "error")
                 self._show_error(f"Parse error: {error}")
+                self._fail(batch, str(error))
             case Acked():
                 pass
             case Received(payload):
-                self._append(f"# {payload.to_wire()}")
+                self._append(f"{number}# {payload.to_wire()}")
             case Completed():
-                self._append("%", "ok")
+                took = time.monotonic() - batch.started[index] if batch else 0.0
+                self._append(f"{number}done in {took:.2f} s", "ok")
                 self.error_label.clear()
-                self._finish_query(text)
+                self._finish_query(key)
+                if text.startswith("StartSession"):
+                    self.session_led.set_state("on", "Session open")
+                elif text.startswith("EndSession"):
+                    self.session_led.set_state("off", "No session")
                 self._refresh_status()
             case Failed(error):
-                line = format_error(error)
-                self._append(line, "error")
-                self._show_error(f"Error {error.number}: {error.text or error.cause}")
-                self._queries.pop(text, None)
-                self._collected.pop(text, None)
+                self._append(f"{number}{format_error(error)}", "error")
+                message = f"{error.number}: {error.text or error.cause}"
+                self._show_error(message)
+                self._fail(batch, message)
+                self._queries.pop(key, None)
+                self._collected.pop(key, None)
             case ConnectionLost(error):
                 self._append(f"Connection lost: {error}", "error")
                 self._show_error(f"Connection lost: {error}")
+                self._fail(batch, f"connection lost: {error}")
                 self._update_connection_state()
 
-    def _finish_query(self, text: str) -> None:
-        callback = self._queries.pop(text, None)
-        data = self._collected.pop(text, [])
+    @staticmethod
+    def _fail(batch: _Batch | None, message: str) -> None:
+        if batch is not None:
+            batch.error = message
+
+    def _finish_query(self, key: tuple[int, int]) -> None:
+        callback = self._queries.pop(key, None)
+        data = self._collected.pop(key, [])
         if callback is not None:
             callback(data)
 
-    def _on_data(self, text: str, payload: DataPayload, status: bool) -> None:
-        if text in self._queries:
-            self._collected.setdefault(text, []).append(payload)
+    def _on_data(self, key: tuple[int, int], text: str, payload: DataPayload, status: bool) -> None:
+        if key in self._queries:
+            self._collected.setdefault(key, []).append(payload)
         if isinstance(payload, Items):
             try:
                 report = report_from_payload(payload)
@@ -507,7 +685,14 @@ class ClientWindow(QMainWindow):
                 self._add_point(self.position, text.split("(")[0])
         if "IsHomed" in values:
             homed = bool(values["IsHomed"])
-            self.homed_label.setText("  Homed" if homed else "  Not homed")
+            self.homed_label.set_state("on" if homed else "off", "Homed" if homed else "Not homed")
+        if "IsUserEnabled" in values:
+            enabled = bool(values["IsUserEnabled"])
+            self.user_led.set_state(
+                "on" if enabled else "off", "User enabled" if enabled else "User disabled"
+            )
+        if "Tool.Name" in values:
+            self.tool_label.setText(f"Tool: {values['Tool.Name']}")
         if "ActiveError" in values:
             self._show_error(
                 f"Active error {values['ActiveError']:g} (severity {values.get('Severity', '?')})"
@@ -552,8 +737,7 @@ class ClientWindow(QMainWindow):
         if self._polling or not self.host.connected:
             return
         self._polling = True
-        future = self.host.run_sequence(recipes.status_lines(), self._relay)
-        future.add_done_callback(lambda _: setattr(self, "_polling", False))
+        self._submit(_STATUS_BATCH, recipes.status_lines())
 
     # -- dialogs ----------------------------------------------------------------------------
 
@@ -581,7 +765,7 @@ class ClientWindow(QMainWindow):
                     lambda: self.query("EnumTools()", lambda d: tools.set_tools(_names(d)))
                 )
                 dialog = tools
-            dialog.run_requested.connect(self.send_lines)
+            dialog.run_requested.connect(lambda lines, d=dialog: self.send_lines(lines, origin=d))
             self._dialogs[name] = dialog
         dialog.show()
         dialog.raise_()
@@ -602,13 +786,16 @@ class ClientWindow(QMainWindow):
 
     def acquire(self, options: dict[str, Any]) -> None:
         if not self.host.connected:
-            self._append("Not connected", "error")
+            self._append("Not connected: connect to a server first (F5).", "error")
             return
         self._append(
             f"> DataAcquire {options['name']} ({options['acquisition_type']}, "
             f"{len(options['points'])} positions)",
             "cmd",
         )
+        dialog = self._dialogs.get("optical")
+        if dialog is not None:
+            dialog.set_busy()
         self._watch_result(self.host.acquire(**options), "acquire")
 
     def _watch_result(self, future: Any, what: str) -> None:
@@ -635,9 +822,12 @@ class ClientWindow(QMainWindow):
             points = result.points()  # type: ignore[attr-defined]
             self.cloud.set_points(points)
             self.cloud.fit()
-            self.cloud_dock.raise_()
+            self.tabs.setCurrentWidget(self.cloud_tab)
             self._append(f"Acquired {len(points)} points", "ok")
             self.error_label.clear()
+            dialog = self._dialogs.get("optical")
+            if dialog is not None:
+                dialog.set_result(True, f"{len(points)} points")
             self._refresh_status()
 
     def _cloud_csv(self) -> str:
@@ -659,17 +849,35 @@ class ClientWindow(QMainWindow):
 
     # -- all commands panel -----------------------------------------------------------------
 
+    @staticmethod
+    def _command_of(item: QTreeWidgetItem | None) -> str:
+        """Return the command name of a tree item; empty for a group heading."""
+        return item.text(0) if item is not None and item.parent() is not None else ""
+
     def _filter_commands(self, text: str) -> None:
         needle = text.casefold()
-        for i in range(self.command_list.count()):
-            item = self.command_list.item(i)
-            if item is not None:
-                item.setHidden(needle not in item.text().casefold())
+        for g in range(self.command_list.topLevelItemCount()):
+            group = self.command_list.topLevelItem(g)
+            if group is None:
+                continue
+            shown = 0
+            for c in range(group.childCount()):
+                child = group.child(c)
+                if child is None:
+                    continue
+                hidden = needle not in child.text(0).casefold()
+                child.setHidden(hidden)
+                shown += not hidden
+            group.setHidden(shown == 0)
+            group.setExpanded(bool(needle) and shown > 0)
 
     def _show_command_form(self, name: str) -> None:
         while self.form_layout.rowCount():
             self.form_layout.removeRow(0)
         self.form_edits.clear()
+        if not name:
+            self.form_status.setText("Pick a command to fill in its arguments.")
+            return
         fields = commandform.command_fields(name)
         for field in fields:
             edit = QLineEdit()
@@ -680,10 +888,9 @@ class ClientWindow(QMainWindow):
         self.form_status.setText("" if fields else "No arguments.")
 
     def _build_from_form(self, *, send: bool) -> None:
-        item = self.command_list.currentItem()
-        if item is None:
+        name = self._command_of(self.command_list.currentItem())
+        if not name:
             return
-        name = item.text()
         try:
             line = commandform.build_command_line(
                 name, {k: e.text() for k, e in self.form_edits.items()}
