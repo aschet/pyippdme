@@ -503,6 +503,15 @@ builds the command lines of the dialogs, `pyippdme.client.commandform` the forms
 commands, and `pyippdme.client.optical` reads a sensor and acquires points; use them to put
 another interface on the client.
 
+### Game controller
+
+In the Teach-in tab, **Game controller** jogs the machine with a pad (any controller SDL2
+knows). Install the extra with `pip install pyippdme[gamepad]`. The left stick moves X and Y,
+the right stick Z (the pace follows the step size), the bumpers halve and double the step, and
+the buttons send the jog box events: A picks a point, B sends a clearance point, X sends
+`Done`, Y sends `F1`. `pyippdme.gui.gamepad.PadMapping` holds the mapping without needing a
+controller, and any object with `poll()` can replace the SDL reader.
+
 ## Building on the package
 
 What to use for what, without reading the simulation code:

@@ -16,8 +16,9 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyippdme.gui.gamepad import GamepadSource, PadMapping, open_gamepad
 from pyippdme.gui.widgets import icon_button, mono, spin
 from pyippdme.loop import LoopThread
 from pyippdme.twin import DigitalTwin
@@ -47,6 +49,7 @@ _DIRECTIONS = {
     "+Y": (0.0, 1.0, 0.0),
     "-Y": (0.0, -1.0, 0.0),
 }
+_PAD_MS = 40
 _KEYS = ("Done", "Del", "F1", "F2", "F3", "F4")
 
 
@@ -104,7 +107,20 @@ class TeachPanel(QWidget):
                 self.jog_buttons[label] = button
                 grid.addWidget(button, row, col)
         jog_layout.addLayout(grid)
+        self.pad_box = QCheckBox("Game controller")
+        self.pad_box.setToolTip(
+            "Left stick: X and Y, right stick: Z, bumpers: step, A: pick point, "
+            "B: clearance point, X: Done, Y: F1"
+        )
+        self.pad_box.toggled.connect(self._use_gamepad)
+        self.pad_status = QLabel("")
+        jog_layout.addWidget(self.pad_box)
+        jog_layout.addWidget(self.pad_status)
         layout.addWidget(jog)
+        self.pad: GamepadSource | None = None
+        self.pad_mapping = PadMapping()
+        self._pad_timer = QTimer(self)
+        self._pad_timer.timeout.connect(self._poll_pad)
 
         goto = QGroupBox("Go to (collision-free)")
         goto_form = QFormLayout(goto)
@@ -244,6 +260,49 @@ class TeachPanel(QWidget):
             )
         return ok
 
+    def _use_gamepad(self, on: bool) -> None:
+        if not on:
+            self._pad_timer.stop()
+            self.pad_status.clear()
+            return
+        if self.pad is None:
+            self.pad = open_gamepad()
+        if self.pad is None:
+            self.pad_box.blockSignals(True)
+            self.pad_box.setChecked(False)
+            self.pad_box.blockSignals(False)
+            self.pad_status.setText("SDL2 is not installed: pip install pyippdme[gamepad]")
+            return
+        self._pad_timer.start(_PAD_MS)
+
+    def _poll_pad(self) -> None:
+        """Move and press what the controller asks for; called by a timer."""
+        if self.pad is None:
+            return
+        state = self.pad.poll()
+        if state is None:
+            self.pad_status.setText("Connect a game controller.")
+            return
+        self.pad_status.setText(self.pad.name)
+        self.pad_mapping.speed = 4 * self.jog_step.value()  # mm/s: the step sets the pace
+        delta = self.pad_mapping.jog(state, _PAD_MS / 1000)
+        if any(delta):
+            self.twin.jog(*delta)
+        for button in self.pad_mapping.pressed(state):
+            match button:
+                case "leftshoulder":
+                    self.jog_step.setValue(max(0.01, self.jog_step.value() / 2))
+                case "rightshoulder":
+                    self.jog_step.setValue(min(200.0, self.jog_step.value() * 2))
+                case "a":
+                    self.pick()
+                case "b":
+                    self.clearance()
+                case "x":
+                    self.press("Done")
+                case "y":
+                    self.press("F1")
+
     def take_position(self) -> None:
         x, y, z = self.twin.snapshot().position
         for box, value in zip(self.target, (x, y, z), strict=True):
@@ -366,5 +425,6 @@ class TeachPanel(QWidget):
 
     def shutdown(self) -> None:
         """Stop the helper threads (the window calls this when it closes)."""
+        self._pad_timer.stop()
         self._pool.shutdown(wait=False, cancel_futures=True)
         self._runner.close()

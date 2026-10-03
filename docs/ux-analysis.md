@@ -39,6 +39,5 @@ build lines for it, and the preview shows each line before it runs.
 
 ## Still open
 
-- Gamepad teach-in: Qt 6 has no gamepad module; jogging is by buttons and keys.
 - CAD import of styli (parts and fixtures can be imported).
 - Cameras that are attached to a chosen component, beyond follow, probe and table.

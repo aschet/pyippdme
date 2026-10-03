@@ -20,6 +20,7 @@ pytest.importorskip("OCP")
 from PySide6.QtWidgets import QApplication
 
 from pyippdme import IppDmeMachine
+from pyippdme.gui.gamepad import PadMapping, PadState
 from pyippdme.gui.main_window import MainWindow
 from pyippdme.twin import DigitalTwin, cad
 
@@ -346,3 +347,40 @@ def test_the_teach_panel_plans_and_runs_a_program(
     assert panel.run_button.isEnabled(), panel.status.text()
     assert "Program: done" in panel.status.text()
     window.toggle_server()
+
+
+class _FakePad:
+    name = "Fake pad"
+
+    def __init__(self) -> None:
+        self.state: PadState | None = PadState()
+
+    def poll(self) -> PadState | None:
+        return self.state
+
+
+def test_gamepad_mapping_has_a_dead_zone_and_edge_triggered_buttons() -> None:
+    mapping = PadMapping(deadzone=0.2, speed=10.0)
+    assert mapping.jog(PadState({"leftx": 0.1}), 1.0) == (0.0, 0.0, 0.0)
+    dx, dy, dz = mapping.jog(PadState({"leftx": 1.0, "lefty": -1.0, "righty": 1.0}), 0.5)
+    assert (dx, dy, dz) == pytest.approx((5.0, 5.0, -5.0))  # up on the stick is +Y
+    assert mapping.pressed(PadState(buttons=frozenset({"a"}))) == ["a"]
+    assert mapping.pressed(PadState(buttons=frozenset({"a", "b"}))) == ["b"]
+    assert mapping.pressed(PadState()) == []
+
+
+def test_the_game_controller_jogs_the_machine(window: MainWindow) -> None:
+    panel = window.teach_panel
+    pad = _FakePad()
+    panel.pad = pad
+    panel.pad_box.setChecked(True)
+    assert panel._pad_timer.isActive()
+    panel._pad_timer.stop()
+    pad.state = PadState({"leftx": 1.0}, frozenset({"rightshoulder"}))
+    step = panel.jog_step.value()
+    panel._poll_pad()
+    assert panel.jog_step.value() == pytest.approx(step * 2)  # no client, so no movement
+    assert panel.pad_status.text() == "Fake pad"
+    pad.state = None
+    panel._poll_pad()
+    assert "Connect" in panel.pad_status.text()
