@@ -384,3 +384,16 @@ def test_the_game_controller_jogs_the_machine(window: MainWindow) -> None:
     pad.state = None
     panel._poll_pad()
     assert "Connect" in panel.pad_status.text()
+
+
+def test_the_machine_panel_sets_table_kind_and_rack(window: MainWindow) -> None:
+    panel = window.machine_panel
+    panel.table_combo.setCurrentIndex(panel.table_combo.findData("moving-y"))
+    assert window.twin.machine.spec.table_kind == "moving-y"
+    panel.rack_combo.setCurrentIndex(panel.rack_combo.findData("front"))
+    panel.rack_inset.setValue(20.0)
+    spec = window.twin.machine.spec
+    assert (spec.rack_side, spec.rack_inset) == ("front", 20.0)
+    panel.preset_combo.setCurrentText("bridge-900")
+    assert window.twin.machine.spec.table_kind == "fixed"  # a preset brings its own layout
+    assert panel.table_combo.currentData() == "fixed"

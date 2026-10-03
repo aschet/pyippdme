@@ -35,7 +35,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -122,6 +122,8 @@ class TwinSnapshot:
     qualified: bool
     detached: bool
     changing_tool: str
+    #: How far the table frame is displaced in the world, for a machine with a moving table.
+    world_shift: Vec3 = (0.0, 0.0, 0.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1370,7 +1372,7 @@ class DigitalTwin:
 
         shift = self.head_shift(tcp, placement)
         for body in self.machine.bodies:
-            if not body.spec.collides or body.spec.moves_with:
+            if not body.spec.collides or self.machine.carried_axes(body):
                 continue
             pose = self.machine.body_pose(body, tcp, rotary, shift)
             blo, bhi = body.bounds
@@ -1383,7 +1385,7 @@ class DigitalTwin:
             check(obj.name, obox, obj.shape, world)
             # Carrying parts of the machine against the sample and fixtures.
             for body in self.machine.bodies:
-                if not body.spec.collides or not body.spec.moves_with:
+                if not body.spec.collides or not self.machine.carried_axes(body):
                     continue
                 pose = self.machine.body_pose(body, tcp, rotary, shift)
                 blo, bhi = body.bounds
@@ -1445,6 +1447,7 @@ class DigitalTwin:
             or self.is_qualified(tool_name, placement.orientation),
             detached=tool_name in self.detached,
             changing_tool=self._changing,
+            world_shift=self.machine.world_shift(position),
         )
 
     def draw_items(self) -> list[DrawItem]:
@@ -1478,6 +1481,9 @@ class DigitalTwin:
                 color = (0.3, 0.3, 0.3)
             items.append(DrawItem(f"tool:{part.name}", part.name, part.mesh, pose, color, "tool"))
         items.extend(self._stored_tool_items(placement.spec.rack_key))
+        if any(snap.world_shift):
+            lift = geometry.translation(*snap.world_shift)
+            items = [replace(item, pose=lift @ item.pose) for item in items]
         return items
 
     def _stored_tool_items(self, mounted_key: str) -> list[DrawItem]:
@@ -1510,7 +1516,8 @@ class DigitalTwin:
     def bounds(self) -> tuple[Vec3, Vec3]:
         """Return the measuring volume, for framing the view."""
         t = self.machine.spec.travel
-        return (0.0, 0.0, 0.0), (t[0], t[1], t[2])
+        dx, dy, dz = self.machine.world_shift(self._pos)
+        return (dx, dy, dz), (t[0] + dx, t[1] + dy, t[2] + dz)
 
     def tool_drop(self, name: str) -> float:
         return drop(self.toolkit.spec(name))

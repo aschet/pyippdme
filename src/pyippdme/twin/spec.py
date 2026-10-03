@@ -49,6 +49,10 @@ class Accuracy:
         return float(((0.12 * p) ** 2 + (e / 12.0) ** 2) ** 0.5)
 
 
+TABLE_KINDS = ("fixed", "moving-y")
+RACK_SIDES = ("back", "front", "left", "right")
+
+
 @dataclass(frozen=True, slots=True)
 class MachineSpec:
     """Kinematics and accuracy of a bridge-type Cartesian CMM."""
@@ -75,8 +79,24 @@ class MachineSpec:
     rotary_axis: Vec3 = (0.0, 0.0, 1.0)
     #: Height of the table surface below the machine zero.
     table_top_z: float = -10.0
+    #: ``fixed``: the table stands still and the bridge carries Y (bridge and gantry machines).
+    #: ``moving-y``: the bridge stands still and the table, with everything on it (rotary table,
+    #: rack, fixtures, parts), carries Y.
+    table_kind: str = "fixed"
+    #: Where the tool rack stands on the table: ``back``, ``front``, ``left`` or ``right``.
+    rack_side: str = "back"
+    #: How far the rack ports are from that edge of the travel range; negative is outside it.
+    rack_inset: float = 45.0
+    #: Position of the first port; ``None`` puts the row along ``rack_side``.
+    rack_origin: Vec3 | None = None
     #: Fields that were derived from CAD geometry and not given (informational).
     derived: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.table_kind not in TABLE_KINDS:
+            raise ValueError(f"table_kind must be one of {', '.join(TABLE_KINDS)}")
+        if self.rack_side not in RACK_SIDES:
+            raise ValueError(f"rack_side must be one of {', '.join(RACK_SIDES)}")
 
     def with_(self, **changes: object) -> MachineSpec:
         return replace(self, **changes)  # type: ignore[arg-type]
@@ -125,6 +145,16 @@ PRESETS: dict[str, MachineSpec] = {
         500.0,
         600.0,
         accuracy=Accuracy(6.0, 200.0, 4.0),
+    ),
+    "moving-table-600": MachineSpec(
+        "Fixed-bridge CMM with moving table 600/800/500",
+        (600.0, 800.0, 500.0),
+        400.0,
+        1000.0,
+        accuracy=Accuracy(1.5, 350.0, 1.5),
+        table_kind="moving-y",
+        rack_side="left",
+        rack_inset=-40.0,
     ),
     "bridge-high-precision": MachineSpec(
         "High-precision bridge CMM 1000/1200/700",
@@ -485,15 +515,18 @@ def parse_manifest(data: dict[str, object], *, base: MachineSpec | None = None) 
         ):
             if key in r:
                 changes[field_name] = float(r[key])  # type: ignore[arg-type]
-    for key in ("name",):
+    for key in ("name", "table_kind", "rack_side"):
         if key in m:
             changes[key] = str(m.pop(key))
+    if "rack_origin" in m:
+        changes["rack_origin"] = _vec(m.pop("rack_origin"))
     for key in (
         "max_speed",
         "acceleration",
         "probing_speed",
         "scanning_speed",
         "table_top_z",
+        "rack_inset",
     ):
         if key in m:
             changes[key] = float(m.pop(key))  # type: ignore[arg-type]
@@ -573,8 +606,15 @@ def manifest_to_toml(manifest: MachineManifest) -> str:
         f"probing_speed = {s.probing_speed}",
         f"scanning_speed = {s.scanning_speed}",
         f"table_top_z = {s.table_top_z}",
+        f'table_kind = "{s.table_kind}"',
+        f'rack_side = "{s.rack_side}"',
+        f"rack_inset = {s.rack_inset}",
         f"require_home = {str(s.require_home).lower()}",
-        "",
+        *(
+            [f"rack_origin = [{s.rack_origin[0]}, {s.rack_origin[1]}, {s.rack_origin[2]}]", ""]
+            if s.rack_origin is not None
+            else [""]
+        ),
         "[machine.accuracy]",
         f"a_um = {s.accuracy.a_um}",
         f"k = {s.accuracy.k}",

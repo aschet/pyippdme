@@ -27,7 +27,7 @@ from pyippdme.gui.widgets import icon_button, spin
 from pyippdme.twin import DigitalTwin, MachineModel
 from pyippdme.twin.cad import CadError
 from pyippdme.twin.library import ROTARY_TABLES, machine_names
-from pyippdme.twin.spec import PRESETS, MachineSpec
+from pyippdme.twin.spec import PRESETS, RACK_SIDES, MachineSpec
 
 __all__ = ["MachinePanel"]
 
@@ -39,6 +39,7 @@ class MachinePanel(QWidget):
 
     def __init__(self, twin: DigitalTwin, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._syncing = False
         self.twin = twin
         #: Called after the machine was replaced.
         self.on_machine_changed: list[Callable[[], None]] = []
@@ -53,10 +54,25 @@ class MachinePanel(QWidget):
         self.rotary_combo.addItem("no rotary table")
         self.rotary_combo.addItems(list(ROTARY_TABLES))
         self.rotary_combo.currentTextChanged.connect(self._rotary_changed)
+        self.table_combo = QComboBox()
+        self.table_combo.addItem("fixed (bridge carries Y)", "fixed")
+        self.table_combo.addItem("moves in Y (fixed bridge)", "moving-y")
+        self.table_combo.setToolTip(
+            "A moving table carries the rack, rotary table, fixtures and parts with it"
+        )
+        self.rack_combo = QComboBox()
+        for side in RACK_SIDES:
+            self.rack_combo.addItem(side, side)
+        self.rack_combo.setToolTip("The table edge the tool rack stands at")
+        self.rack_inset = spin(-500, 500, 45.0, 5.0, 0, " mm")
+        self.rack_inset.setToolTip("Distance of the rack ports from that edge of the travel range")
         self.time_combo = QComboBox()
         for label, _ in TIME_SCALES:
             self.time_combo.addItem(label)
         self.time_combo.setCurrentIndex(1)
+        for combo in (self.table_combo, self.rack_combo):
+            combo.currentIndexChanged.connect(lambda _=0: self._layout_changed())
+        self.rack_inset.valueChanged.connect(lambda _=0: self._layout_changed())
         self.time_combo.setToolTip("How fast the simulated machine runs compared to a real one")
         self.time_combo.currentIndexChanged.connect(
             lambda i: setattr(self.twin, "time_scale", TIME_SCALES[i][1])
@@ -75,6 +91,9 @@ class MachinePanel(QWidget):
         self.temperature.valueChanged.connect(lambda v: setattr(self.twin, "temperature", v))
         form.addRow("Machine", self.preset_combo)
         form.addRow("Rotary table", self.rotary_combo)
+        form.addRow("Table", self.table_combo)
+        form.addRow("Tool rack at", self.rack_combo)
+        form.addRow("Rack inset", self.rack_inset)
         form.addRow("Motion", self.time_combo)
         form.addRow("Speed override", self.override)
         form.addRow(self.noise_check)
@@ -97,8 +116,14 @@ class MachinePanel(QWidget):
 
     # -- machine ----------------------------------------------------------------------------
 
-    def _spec_for_choice(self) -> MachineSpec:
+    def _spec_for_choice(self, *, preset: bool = False) -> MachineSpec:
         spec = PRESETS[self.preset_combo.currentText()]
+        if not preset:
+            spec = spec.with_(
+                table_kind=self.table_combo.currentData(),
+                rack_side=self.rack_combo.currentData(),
+                rack_inset=self.rack_inset.value(),
+            )
         table = self.rotary_combo.currentText()
         if table in ROTARY_TABLES:
             spec = spec.with_(
@@ -107,14 +132,18 @@ class MachinePanel(QWidget):
             )
         return spec
 
-    def _apply_choice(self) -> None:
-        self.twin.set_machine(MachineModel.default(self._spec_for_choice()))
+    def _apply_choice(self, *, preset: bool = False) -> None:
+        self.twin.set_machine(MachineModel.default(self._spec_for_choice(preset=preset)))
         self.refresh()
         for callback in self.on_machine_changed:
             callback()
 
     def _preset_changed(self, name: str) -> None:
         if name in PRESETS:
+            self._apply_choice(preset=True)
+
+    def _layout_changed(self) -> None:
+        if not self._syncing:
             self._apply_choice()
 
     def _rotary_changed(self, _name: str) -> None:
@@ -155,6 +184,11 @@ class MachinePanel(QWidget):
                 self.preset_combo.blockSignals(True)
                 self.preset_combo.setCurrentText(key)
                 self.preset_combo.blockSignals(False)
+        self._syncing = True
+        self.table_combo.setCurrentIndex(self.table_combo.findData(s.table_kind))
+        self.rack_combo.setCurrentIndex(self.rack_combo.findData(s.rack_side))
+        self.rack_inset.setValue(s.rack_inset)
+        self._syncing = False
         has_table = s.rotary_origin is not None
         self.rotary_combo.blockSignals(True)
         if not has_table:

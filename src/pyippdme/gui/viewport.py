@@ -119,7 +119,8 @@ class Viewport(QWidget):
 
     def _tool_pose(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         snap = self.view.snapshot()
-        return np.asarray(snap.position, dtype=float), np.asarray(snap.tool_axis, dtype=float)
+        tcp = np.asarray(snap.position, dtype=float) + np.asarray(snap.world_shift, dtype=float)
+        return tcp, np.asarray(snap.tool_axis, dtype=float)
 
     def focus_on(self, point: tuple[float, float, float], distance: float | None = None) -> None:
         self.target = np.asarray(point, dtype=float)
@@ -349,8 +350,7 @@ class Viewport(QWidget):
                 painter, view, np.asarray(list(self.view.contacts)), QColor(255, 80, 60), 3.0
             )
 
-        snap = self.view.snapshot()
-        xy, depth = self._project(np.asarray([snap.position], dtype=float), view)
+        xy, depth = self._project(np.asarray([self._tool_pose()[0]], dtype=float), view)
         if depth[0] > 1.0:
             x, y = float(xy[0, 0]), float(xy[0, 1])
             painter.setPen(QPen(QColor(255, 220, 60), 1.5))
@@ -371,6 +371,8 @@ class Viewport(QWidget):
             return
         if len(points) > 80_000:
             points = points[:: math.ceil(len(points) / 80_000)]
+        # Measured points belong to the table, which slides on a machine with a moving table.
+        points = points + np.asarray(self.view.snapshot().world_shift, dtype=float)
         xy, depth = self._project(points, view)
         ok = depth > 1.0
         xy, z = xy[ok], points[ok, 2]

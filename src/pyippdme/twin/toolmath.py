@@ -170,10 +170,20 @@ def rack_keys(tools: dict[str, ToolSpec]) -> list[str]:
 
 
 def rack_slots(spec: MachineSpec, keys: list[str]) -> dict[str, Vec3]:
-    """Positions of the tool rack's ports (top of each port), along the back of the table."""
+    """Positions of the tool rack's ports (top of each port), along ``spec.rack_side``."""
     count = max(len(keys), 1)
-    pitch = min(80.0, 0.8 * spec.travel[0] / count)
-    x0 = 0.08 * spec.travel[0] + 20.0
-    y = spec.travel[1] - 45.0
+    tx, ty, _ = spec.travel
     z = spec.table_top_z + 14.0 + 6.0
-    return {key: (x0 + i * pitch, y, z) for i, key in enumerate(keys)}
+    inset = spec.rack_inset
+    if spec.rack_side in ("back", "front"):
+        pitch = min(80.0, 0.8 * tx / count)
+        first = (0.08 * tx + 20.0, ty - inset if spec.rack_side == "back" else inset)
+        step = (pitch, 0.0)
+    else:
+        pitch = min(80.0, 0.8 * ty / count)
+        first = (tx - inset if spec.rack_side == "right" else inset, 0.08 * ty + 20.0)
+        step = (0.0, pitch)
+    if spec.rack_origin is not None:
+        first = (spec.rack_origin[0], spec.rack_origin[1])
+        z = spec.rack_origin[2]
+    return {key: (first[0] + i * step[0], first[1] + i * step[1], z) for i, key in enumerate(keys)}

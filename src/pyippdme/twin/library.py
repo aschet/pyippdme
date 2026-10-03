@@ -64,6 +64,13 @@ _ALL: tuple[Component, ...] = (
     ),
     _c(
         "head",
+        "indexing head, 2.5 degree steps (articulating)",
+        "Two axes in 2.5 degree steps (720 orientations); each position is qualified on its own.",
+        head="indexed",
+        index_step=2.5,
+    ),
+    _c(
+        "head",
         "continuous head (5-axis)",
         "Two axes continuously, qualified once for all angles.",
         head="continuous",

@@ -90,14 +90,16 @@ def _default_shape(name: str, spec: MachineSpec, slots: dict[str, Vec3]) -> cad.
     if name == "table":
         return cad.rounded_box(tx + 400.0, ty + 500.0, 240.0, (-200.0, -250.0, top - 240.0), 6.0)
     if name == "stand":
+        # The stand is fixed in the world; for a moving table it has to be as long as the stroke.
+        y_lo = -230.0 - (ty if spec.table_kind == "moving-y" else 0.0)
         legs = [
             cad.rounded_box(110.0, 110.0, 380.0, (x, y, top - 620.0), 6.0)
             for x in (-180.0, tx + 70.0)
-            for y in (-230.0, ty + 120.0)
+            for y in (y_lo, ty + 120.0)
         ]
         frame = [
             cad.make_box(tx + 400.0, 60.0, 40.0, (-200.0, y, top - 360.0))
-            for y in (-205.0, ty + 145.0)
+            for y in (y_lo + 25.0, ty + 145.0)
         ]
         shape = legs[0]
         for part in (*legs[1:], *frame):
@@ -124,10 +126,15 @@ def _default_shape(name: str, spec: MachineSpec, slots: dict[str, Vec3]) -> cad.
         return cad.rounded_box(84.0, 84.0, tz + 190.0, (-42.0, -42.0, _QUILL_BOTTOM), 8.0)
     if name == "rack":
         keys = list(slots)
-        xs = [p[0] for p in slots.values()]
-        y = next(iter(slots.values()))[1] if slots else ty - 45.0
-        x0, x1 = (min(xs) - 40.0, max(xs) + 40.0) if xs else (0.0, 100.0)
-        plate = cad.rounded_box(x1 - x0, 70.0, 14.0, (x0, y - 35.0, top), 3.0)
+        points = list(slots.values())
+        xs = [p[0] for p in points] or [0.0]
+        ys = [p[1] for p in points] or [ty - 45.0]
+        along_x = spec.rack_side in ("back", "front")
+        if along_x:
+            x0, x1, y0, y1 = min(xs) - 40.0, max(xs) + 40.0, ys[0] - 35.0, ys[0] + 35.0
+        else:
+            x0, x1, y0, y1 = xs[0] - 35.0, xs[0] + 35.0, min(ys) - 40.0, max(ys) + 40.0
+        plate = cad.rounded_box(x1 - x0, y1 - y0, 14.0, (x0, y0, top), 3.0)
         shape = plate
         for key in keys:
             sx, sy, _ = slots[key]
@@ -142,6 +149,19 @@ def _default_shape(name: str, spec: MachineSpec, slots: dict[str, Vec3]) -> cad.
 
 
 def _default_components(spec: MachineSpec) -> tuple[ComponentSpec, ...]:
+    if spec.table_kind == "moving-y":
+        # What moves is named as it is in the world: the table and what stands on it carry Y.
+        comps = [
+            ComponentSpec("table", moves_with=("y",)),
+            ComponentSpec("stand", collides=False),
+            ComponentSpec("bridge"),
+            ComponentSpec("carriage", moves_with=("x",), collides=False),
+            ComponentSpec("quill", moves_with=("x", "z")),
+            ComponentSpec("rack", moves_with=("y",)),
+        ]
+        if spec.rotary_origin is not None:
+            comps.append(ComponentSpec("rotary", moves_with=("y",), rotates=True))
+        return tuple(comps)
     comps = [
         ComponentSpec("table"),
         ComponentSpec("stand", collides=False),
@@ -251,6 +271,15 @@ class MachineModel:
 
         derived: list[str] = []
         s = spec or PRESETS["bridge-700"]
+        if s.table_kind == "moving-y":
+            world = {
+                "table": ("y",),
+                "rotary": ("y",),
+                "bridge": (),
+                "carriage": ("x",),
+                "quill": ("x", "z"),
+            }
+            classified = [(r, p, world.get(r, axes), rot) for r, p, axes, rot in classified]
         tables = [p for r, p, _, _ in classified if r == "table"]
         if tables:
             lo = np.asarray(np.min([cad.bounding_box(t.shape)[0] for t in tables], axis=0))
@@ -309,15 +338,35 @@ class MachineModel:
         tool, an articulated head).
         """
         offset = [0.0, 0.0, 0.0]
-        for axis in body.spec.moves_with:
+        for axis in self.carried_axes(body):
             i = "xyz".index(axis)
-            offset[i] = position[i] + shift[i]
+            offset[i] = position[i] + (shift[i] if "z" in body.spec.moves_with else 0.0)
         m = geometry.translation(*offset)
         if body.spec.rotates and self.spec.rotary_origin is not None:
             m = m @ geometry.rotation_about(
                 self.spec.rotary_origin, self.spec.rotary_axis, rotary_deg
             )
         return m
+
+    def carried_axes(self, body: MachineBody) -> tuple[str, ...]:
+        """Return the axes by which ``body`` moves relative to the table.
+
+        Poses and measurements are in the frame of the table, so a moving table (``moving-y``)
+        does not move in it, and what stands still in the world moves by Y instead.
+        """
+        axes = body.spec.moves_with
+        if self.spec.table_kind != "moving-y":
+            return axes
+        carried = {a for a in axes if a != "y"}
+        if "y" not in axes:
+            carried.add("y")
+        return tuple(a for a in "xyz" if a in carried)
+
+    def world_shift(self, position: Vec3) -> Vec3:
+        """Return how far the table frame is displaced in the world (a moving table slides)."""
+        if self.spec.table_kind == "moving-y":
+            return (0.0, -position[1], 0.0)
+        return (0.0, 0.0, 0.0)
 
     def rotary_pose(self, rotary_deg: float) -> Matrix:
         """Pose of everything mounted on the rotary table at ``rotary_deg``."""
