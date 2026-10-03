@@ -76,6 +76,7 @@ from pyippdme.protocol.errors import ErrorCode, ErrorSeverity, ServerError
 from pyippdme.protocol.signature import DataType, Parameter
 from pyippdme.server import builders
 from pyippdme.server._util import bad_argument
+from pyippdme.server.motion import CalibrationAware, OffsetProvider
 from pyippdme.server.registry import CommandHandler, CommandRegistry, HandlerResult, PropertyKind
 from pyippdme.server.tool import PARAMETER_FIELDS, ParameterField, ToolParameter, ToolParameters
 from pyippdme.simulation.context import Ctx, csy_context
@@ -325,8 +326,8 @@ def tool_alignment(ctx: Ctx, tool_name: str) -> tuple[Vec3, Vec3 | None]:
 
 def _require_calibrated(ctx: Ctx, tool_name: str, cause: str) -> None:
     """Raise ``2000`` if the tool handler says the tool is not calibrated (Tables 114, 116)."""
-    check = getattr(ctx.tool_handler, "is_calibrated", None)
-    if check is not None and not check(tool_name):
+    handler = ctx.tool_handler
+    if isinstance(handler, CalibrationAware) and not handler.is_calibrated(tool_name):
         raise ServerError(
             ErrorSeverity.CRITICAL, ErrorCode.TOOL_NOT_CALIBRATED, cause, "Tool not calibrated"
         )
@@ -542,7 +543,8 @@ def _try_get_named_tool_property(ctx: Ctx, arg: NamedValue) -> NamedValue | None
         # "Relative to an arbitrary reference point which changes from server to server"
         # (Table 116): zero, unless the tool handler knows the tool's offsets.
         _require_calibrated(ctx, tool_name, arg.name)
-        offsets = getattr(ctx.tool_handler, "avr_offsets", lambda _name: None)(tool_name)
+        handler = ctx.tool_handler
+        offsets = handler.avr_offsets(tool_name) if isinstance(handler, OffsetProvider) else None
         if offsets is None:
             return NamedValue(arg.name, tuple(Number.of(0.0) for _ in range(3)))
         offsets = csy_context(ctx).direction_to_client(offsets)

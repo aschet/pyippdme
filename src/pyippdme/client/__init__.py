@@ -106,7 +106,7 @@ class IppDmeClient:
         itself (see :meth:`start_daemon` for the common case that just wants
         one and doesn't care which); public because knowing *which* commands
         start a daemon is protocol/library knowledge this class doesn't
-        have (see :mod:`pyippdme.cli._interaction`, which does).
+        have (see :mod:`pyippdme.client.interaction`, which does).
         """
         for _ in range(EventTag.MAX):
             n = self._next_event_tag

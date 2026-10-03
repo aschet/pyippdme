@@ -117,12 +117,26 @@ class ToolHandler(Protocol):
         """
         ...
 
-    # Optional, looked up by name so that handlers written before them keep working:
-    #
-    # ``is_calibrated(tool_name) -> bool``: ``False`` makes ``Tool.Alignment`` and
-    # ``Tool.AvrOffsets`` fail with ``2000`` "Tool not calibrated" (Tables 114 and 116).
-    # ``avr_offsets(tool_name) -> Vec3 | None``: the average tool offsets in machine coordinates
-    # (``Tool.AvrOffsets``, Table 116); ``None`` answers with zeros.
+
+@runtime_checkable
+class CalibrationAware(Protocol):
+    """Optional part of a :class:`ToolHandler`: which tools are calibrated.
+
+    ``False`` makes ``Tool.Alignment`` and ``Tool.AvrOffsets`` fail with ``2000``
+    "Tool not calibrated" (Tables 114 and 116). Without it every tool counts as calibrated.
+    """
+
+    def is_calibrated(self, tool_name: str) -> bool: ...
+
+
+@runtime_checkable
+class OffsetProvider(Protocol):
+    """Optional part of a :class:`ToolHandler`: the average tool offsets (Table 116).
+
+    Returns them in machine coordinates, or ``None`` to answer with zeros.
+    """
+
+    def avr_offsets(self, tool_name: str) -> Vec3 | None: ...
 
 
 @runtime_checkable

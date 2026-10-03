@@ -6,7 +6,7 @@
 
 Same underlying mechanics as :mod:`pyippdme.cli.client` (a generic client
 that parses and sends whatever method call it is given, via
-:func:`pyippdme.cli._interaction.run_command_line`) with a fuller-screen
+:func:`pyippdme.client.interaction.run_command_line`) with a fuller-screen
 interface: a scrollback log of every command/response, a connection bar,
 a sidebar of known command names, a real autocompletion dropdown, and
 command history - none of which the barebones client has. Known command
@@ -95,7 +95,9 @@ from textual.widgets import (
 )
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 
-from pyippdme.cli._interaction import (
+from pyippdme.cli.script import VIRTUAL_HOST, describe_address
+from pyippdme.client import IppDmeClient
+from pyippdme.client.interaction import (
     Acked,
     Completed,
     ConnectionLost,
@@ -105,8 +107,6 @@ from pyippdme.cli._interaction import (
     format_error,
     run_command_line,
 )
-from pyippdme.cli.script import VIRTUAL_HOST, describe_address
-from pyippdme.client import IppDmeClient
 from pyippdme.exceptions import IppDmeConnectionError
 from pyippdme.protocol.network import TCP_NETWORK, MemoryNetwork
 from pyippdme.protocol.parameters import ParameterName

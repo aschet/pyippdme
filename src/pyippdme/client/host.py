@@ -4,7 +4,7 @@
 
 """Run an I++ DME client on a background thread, for front ends that own the main thread.
 
-The counterpart of :class:`pyippdme.twin.host.ServerHost`: a GUI keeps its thread, the asyncio
+The counterpart of :class:`pyippdme.server.host.ServerHost`: a GUI keeps its thread, the asyncio
 loop runs here. Every command runs as its own task, so a long ``GoTo`` does not block ``AbortE``
 or a status query sent meanwhile. Callbacks run on the loop thread; a Qt front end hands them over
 with a signal.
@@ -12,16 +12,15 @@ with a signal.
 
 from __future__ import annotations
 
-import asyncio
-import threading
 from collections.abc import Callable, Coroutine
 from concurrent.futures import Future
 from typing import Any, TypeVar
 
-from pyippdme.cli._interaction import CommandEvent, ConnectionLost, run_command_line
 from pyippdme.client import IppDmeClient
+from pyippdme.client.interaction import CommandEvent, ConnectionLost, run_command_line
 from pyippdme.client.model import IppDmeMachine
 from pyippdme.client.optical import SensorInfo, acquire, read_sensor_info
+from pyippdme.loop import LoopThread
 from pyippdme.protocol.network import TCP_NETWORK, MemoryNetwork, Network
 from pyippdme.rawdata.formats import ScanData
 from pyippdme.server import IppDmeServer
@@ -36,19 +35,13 @@ class ClientHost:
     """One connection to a server, driven from any thread."""
 
     def __init__(self) -> None:
-        self._loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(target=self._run, name="ippdme-client", daemon=True)
-        self._thread.start()
+        self._thread = LoopThread("ippdme-client")
         self._client: IppDmeClient | None = None
         self._embedded: IppDmeServer[Any] | None = None
         self._address: tuple[str, Network] = ("", TCP_NETWORK)
 
-    def _run(self) -> None:
-        asyncio.set_event_loop(self._loop)
-        self._loop.run_forever()
-
     def submit(self, coro: Coroutine[Any, Any, T]) -> Future[T]:
-        return asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return self._thread.submit(coro)
 
     @property
     def connected(self) -> bool:
@@ -135,7 +128,7 @@ class ClientHost:
 
     def run_sequence(self, lines: list[str], on_event: EventHandler) -> Future[bool]:
         """Send the lines one after the other; stops at the first error. True if all succeeded."""
-        from pyippdme.cli._interaction import Failed, ParseFailed
+        from pyippdme.client.interaction import Failed, ParseFailed
 
         async def go() -> bool:
             client = self._client
@@ -156,6 +149,4 @@ class ClientHost:
         try:
             self.disconnect().result(timeout=10)
         finally:
-            self._loop.call_soon_threadsafe(self._loop.stop)
-            self._thread.join(timeout=5)
-            self._loop.close()
+            self._thread.close()

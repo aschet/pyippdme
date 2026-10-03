@@ -42,7 +42,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyippdme.cli._interaction import (
+from pyippdme.client import commandform, recipes
+from pyippdme.client.host import ClientHost
+from pyippdme.client.interaction import (
     Acked,
     Completed,
     ConnectionLost,
@@ -51,8 +53,6 @@ from pyippdme.cli._interaction import (
     Received,
     format_error,
 )
-from pyippdme.client import commandform, recipes
-from pyippdme.client.host import ClientHost
 from pyippdme.client.report import report_from_payload
 from pyippdme.gui import client_dialogs as dialogs
 from pyippdme.gui.icons import app_icon, load_icon

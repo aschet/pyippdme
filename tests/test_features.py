@@ -31,7 +31,7 @@ def _sphere_points(center: np.ndarray, radius: float, n: int = 40) -> np.ndarray
     rng = np.random.default_rng(0)
     d = rng.normal(size=(n, 3))
     d[:, 2] = np.abs(d[:, 2])
-    return center + radius * d / np.linalg.norm(d, axis=1, keepdims=True)
+    return np.asarray(center + radius * d / np.linalg.norm(d, axis=1, keepdims=True))
 
 
 def test_sphere_fit_recovers_centre_and_radius() -> None:

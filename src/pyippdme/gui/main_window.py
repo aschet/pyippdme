@@ -37,9 +37,9 @@ from PySide6.QtWidgets import (
 from pyippdme.gui.twin_panels import CheckPanel, SafetyPanel, ToolPanel
 from pyippdme.gui.viewport import Viewport
 from pyippdme.protocol.transport import DEFAULT_PORT
+from pyippdme.server.host import ServerHost
 from pyippdme.twin import DigitalTwin, MachineModel, TwinEvent, demo_sample, geometry
 from pyippdme.twin.cad import SUPPORTED_SUFFIXES, CadError
-from pyippdme.twin.host import ServerHost
 from pyippdme.twin.objects import SceneObject
 from pyippdme.twin.spec import PRESETS
 

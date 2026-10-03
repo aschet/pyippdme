@@ -8,6 +8,7 @@ I++ DME - Dimensional Measurement Equipment Interface.
 """
 
 from pyippdme.client import IppDmeClient
+from pyippdme.client.host import ClientHost
 from pyippdme.client.model import IppDmeMachine
 from pyippdme.exceptions import (
     IppDmeConnectionError,
@@ -16,6 +17,7 @@ from pyippdme.exceptions import (
     IppDmeServerError,
     IppDmeTimeoutError,
 )
+from pyippdme.loop import LoopThread
 from pyippdme.protocol.commands import CommandName
 from pyippdme.protocol.errors import ErrorSeverity, ServerError
 from pyippdme.protocol.namespace import proprietary_name
@@ -23,11 +25,15 @@ from pyippdme.protocol.network import TCP_NETWORK, MemoryNetwork, Network
 from pyippdme.protocol.parameters import ParameterName
 from pyippdme.protocol.transport import DEFAULT_PORT
 from pyippdme.server import IppDmeServer
+from pyippdme.server.backend import ContourBackend, MachineBackend
 from pyippdme.server.dispatch import command, command_proprietary, register_object
+from pyippdme.server.host import ServerHost
 from pyippdme.server.motion import (
+    CalibrationAware,
     MotionError,
     MotionModel,
     MotionRequest,
+    OffsetProvider,
     ProbeRequest,
     ProbeResult,
     ToolHandler,
@@ -54,9 +60,12 @@ __all__ = [
     "DEFAULT_COMMAND_CLASSES",
     "DEFAULT_PORT",
     "TCP_NETWORK",
+    "CalibrationAware",
+    "ClientHost",
     "CommandContext",
     "CommandName",
     "CommandRegistry",
+    "ContourBackend",
     "CoordinateTransform",
     "CsyContext",
     "CylinderSurface",
@@ -69,12 +78,15 @@ __all__ = [
     "IppDmeServer",
     "IppDmeServerError",
     "IppDmeTimeoutError",
+    "LoopThread",
+    "MachineBackend",
     "MachineState",
     "MemoryNetwork",
     "MotionError",
     "MotionModel",
     "MotionRequest",
     "Network",
+    "OffsetProvider",
     "ParameterName",
     "PlaneSurface",
     "ProbeRequest",
@@ -82,6 +94,7 @@ __all__ = [
     "RawSensor",
     "SampleSurface",
     "ServerError",
+    "ServerHost",
     "SphereSurface",
     "Spy",
     "SpyDirection",

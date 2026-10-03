@@ -498,6 +498,25 @@ builds the command lines of the dialogs, `pyippdme.client.commandform` the forms
 commands, and `pyippdme.client.optical` reads a sensor and acquires points; use them to put
 another interface on the client.
 
+## Building on the package
+
+What to use for what, without reading the simulation code:
+
+| You want to | Use |
+| --- | --- |
+| talk to a server from code | `IppDmeMachine` (typed) or `IppDmeClient` (raw commands) |
+| run commands typed or scripted, and show every step | `pyippdme.client.interaction.run_command_line` (events: `Acked`, `Received`, `Completed`, `Failed`, ...) |
+| put a client on a GUI thread | `ClientHost` (own thread, overlapping commands), `recipes` (command lines for moves, points, scans, tools, speeds), `commandform` (a form for every command; pass your own catalog), `optical` (sensor info, `DataAcquire` and the point transfer) |
+| run any asyncio work off the GUI thread | `LoopThread`; `ServerHost` and `ClientHost` are built on it |
+| write a server for a real machine | `IppDmeServer` with your own command classes, or `VirtualCMM` with your parts below |
+| simulate part of a machine | the optional parts of `VirtualCMM`: `MotionModel` (moves, probing, homing, coordinate chain), `SampleSurface` or `RawSensor` (what is measured), `ToolHandler` (tool changes, qualification, volumes) and `MachineBackend` (scans). Optional extras are separate protocols: `CalibrationAware`, `OffsetProvider` and `ContourBackend` |
+| transform coordinates | `pyippdme.types.csy` (`CsyContext`, `CSY_CHAIN`): Figure 12 and the Euler angles of the standard |
+| plan paths and time | `pyippdme.twin.planning`, `pyippdme.twin.toolmath` (no CAD needed), and `pyippdme.server.contour.trace_contour` for unknown contours |
+| model tools, sensors, check artefacts | `pyippdme.twin.spec`, `.optical`, `.depthbuffer`, `.pointtypes`, `.features` (numpy only; the OpenCASCADE parts are `twin.cad`, `twin.tools`, `twin.machine`, `twin.twin`) |
+
+`examples/custom_server.py` builds a small server from the four parts, and
+`examples/client_without_gui.py` drives a server with `ClientHost`, `recipes` and `optical`.
+
 ## Interactive shell
 
 ```bash

@@ -31,9 +31,9 @@ from dataclasses import dataclass
 from pyippdme.types.vec3 import Vec3
 
 #: The token that starts each box in the answer.
-OBB_TOKEN = "OBB"  # noqa: S105
+OBB_TOKEN = "OBB"  # noqa: S105  # nosec B105
 #: Precedes each sphere of ``Tool.AlignmentVolume`` (Table 118).
-SPH_TOKEN = "SPH"  # noqa: S105
+SPH_TOKEN = "SPH"  # noqa: S105  # nosec B105
 #: Numbers per box after the token: ``C``, ``E``, ``I``, ``J``, ``K``.
 OBB_NUMBERS = 15
 

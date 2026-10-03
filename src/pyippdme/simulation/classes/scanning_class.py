@@ -116,7 +116,7 @@ from pyippdme.server._util import (
     incorrect_arguments,
     positional_numbers,
 )
-from pyippdme.server.backend import MachineBackend
+from pyippdme.server.backend import ContourBackend, MachineBackend
 from pyippdme.server.contour import ContourConstraint, ContourScan, ContourStop
 from pyippdme.server.registry import CommandRegistry, HandlerResult
 from pyippdme.simulation.classes.tool_class import (
@@ -749,8 +749,7 @@ def _contour_stream(
     A backend that can probe a surface implements ``scan_contour``; without one the legacy
     straight-line approximation below is used.
     """
-    follow = getattr(backend, "scan_contour", None)
-    if follow is None:
+    if not isinstance(backend, ContourBackend):
         return None
     ctx.state.mover.user_enabled = False
     try:
@@ -759,7 +758,7 @@ def _contour_stream(
         reference = (0.0, 0.0, 1.0)
 
     async def _stream() -> AsyncIterator[NumericData]:
-        async for point in follow(scan, ctx.cancel):
+        async for point in backend.scan_contour(scan, ctx.cancel):
             ctx.state.cart_cmm.position = point
             yield NumericData(_report_values(ctx, point, reference, cause))
 

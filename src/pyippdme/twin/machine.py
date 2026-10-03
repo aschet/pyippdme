@@ -251,11 +251,11 @@ class MachineModel:
         s = spec or PRESETS["bridge-700"]
         tables = [p for r, p, _, _ in classified if r == "table"]
         if tables:
-            lo = np.min([cad.bounding_box(t.shape)[0] for t in tables], axis=0)
-            hi = np.max([cad.bounding_box(t.shape)[1] for t in tables], axis=0)
+            lo = np.asarray(np.min([cad.bounding_box(t.shape)[0] for t in tables], axis=0))
+            hi = np.asarray(np.max([cad.bounding_box(t.shape)[1] for t in tables], axis=0))
             if origin is None:
                 # Machine zero: a tenth of the table in from its corner, on the table surface.
-                size = hi - lo
+                size: np.ndarray = hi - lo
                 origin = (
                     float(lo[0] + 0.1 * size[0]),
                     float(lo[1] + 0.1 * size[1]),
@@ -287,8 +287,8 @@ class MachineModel:
             bodies.append(MachineBody(comp, shape, cad.tessellate(shape), color))
         rotaries = [b for b in bodies if b.spec.rotates]
         if rotaries and s.rotary_origin is None:
-            lo, hi = cad.bounding_box(rotaries[0].shape)
-            s = replace(s, rotary_origin=((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, hi[2]))
+            rlo, rhi = cad.bounding_box(rotaries[0].shape)
+            s = replace(s, rotary_origin=((rlo[0] + rhi[0]) / 2, (rlo[1] + rhi[1]) / 2, rhi[2]))
             derived.append("rotary_origin")
         return cls(replace(s, derived=tuple(derived)), bodies)
 

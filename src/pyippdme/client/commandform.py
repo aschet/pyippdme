@@ -21,6 +21,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 
 from pyippdme.protocol.signature import DataType
+from pyippdme.server.catalog import CommandInfo
 from pyippdme.simulation.catalog import BUILTIN_COMMANDS
 
 __all__ = [
@@ -57,14 +58,20 @@ class FormField:
         return kind if self.mandatory else f"{kind} (optional)"
 
 
-def command_names() -> list[str]:
-    """All commands of the bundled catalog, sorted."""
-    return sorted(BUILTIN_COMMANDS)
+def command_names(catalog: Mapping[str, CommandInfo] = BUILTIN_COMMANDS) -> list[str]:
+    """All commands of ``catalog`` (default: the bundled classes), sorted."""
+    return sorted(catalog)
 
 
-def command_fields(name: str) -> list[FormField]:
-    """Return the inputs of ``name``; empty without arguments (or without a schema)."""
-    info = BUILTIN_COMMANDS.get(name)
+def command_fields(
+    name: str, catalog: Mapping[str, CommandInfo] = BUILTIN_COMMANDS
+) -> list[FormField]:
+    """Return the inputs of ``name``; empty without arguments (or without a schema).
+
+    ``catalog`` can come from :func:`~pyippdme.server.catalog.build_command_catalog` for your own
+    command classes.
+    """
+    info = catalog.get(name)
     if info is None or not info.arguments:
         return []
     return [FormField(p.name, p.datatype, p.mandatory, p.positional) for p in info.arguments]
@@ -81,7 +88,10 @@ def _render(field: FormField, text: str) -> str:
 
 
 def build_command_line(
-    name: str, values: Mapping[str, str], fields: list[FormField] | None = None
+    name: str,
+    values: Mapping[str, str],
+    fields: list[FormField] | None = None,
+    catalog: Mapping[str, CommandInfo] = BUILTIN_COMMANDS,
 ) -> str:
     """Turn typed values into a command line; empty values are left out.
 
@@ -89,7 +99,7 @@ def build_command_line(
     (a gap in the middle is an error, as the protocol has no way to skip an argument).
     Raises :class:`ValueError` when a mandatory value is missing.
     """
-    fields = command_fields(name) if fields is None else fields
+    fields = command_fields(name, catalog) if fields is None else fields
     parts: list[str] = []
     gap: str | None = None
     for field in fields:
