@@ -354,3 +354,28 @@ async def test_pointer_commands_name_the_parameter_blocks(started_client: IppDme
     with pytest.raises(IppDmeServerError) as excinfo:
         await started_client.call(CommandName.OPT_PAR)  # no optical tool
     assert excinfo.value.error.number == "1506"
+
+
+async def test_a_property_used_as_a_command_is_a_bad_context(network, server_port) -> None:  # type: ignore[no-untyped-def]
+    """6.20.2, Table 113: ``Tool.A()`` is only valid as an argument of ``Get`` or ``OnReport``."""
+    reader, writer = await network.open_connection("x", server_port)
+    writer.write(b"00001 StartSession()\r\n00002 Tool.A()\r\n")
+    await writer.drain()
+    lines = [(await reader.readline()).decode().strip() for _ in range(4)]
+    writer.close()
+    assert '00002 ! Error(3,0508,"Protocol","Bad context")' in lines
+
+
+async def test_use_smallest_angle_refuses_a_half_turn_in_both_spellings(
+    started_client: IppDmeClient,
+) -> None:
+    await _use_align_probe(started_client)
+    await started_client.call(CommandName.ALIGN_TOOL, *(Number.of(v) for v in (0, 0, 1, 5)))
+    await started_client.call(CommandName.USE_SMALLEST_ANGLE_TO_ALIGN_TOOL, Number.of(1))
+    with pytest.raises(IppDmeServerError) as error:
+        await started_client.call(CommandName.ALIGN_TOOL, *(Number.of(v) for v in (0, 0, -1, 5)))
+    assert error.value.error.number == "2500"
+    await started_client.call(CommandName.CLEAR_ALL_ERRORS)
+    # The other spelling in the text of the standard is the same command.
+    await started_client.call("UseSmallestAngleToAlignTool", Number.of(0))
+    await started_client.call(CommandName.ALIGN_TOOL, *(Number.of(v) for v in (0, 0, -1, 5)))

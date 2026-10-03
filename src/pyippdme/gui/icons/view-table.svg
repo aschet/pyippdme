@@ -1,0 +1,7 @@
+<!-- SPDX-FileCopyrightText: 2026 Thomas Ascher <thomas.ascher@gmx.at> -->
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2f6fb0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3 16 12 20l9-4-9-4z" fill="#dbe8f6"/>
+  <path d="M3 16v-3l9 4 9-4v3" stroke="#7fb8d8"/>
+  <path d="M12 3v7M9 7l3 3 3-3" stroke="#e8833a"/>
+</svg>

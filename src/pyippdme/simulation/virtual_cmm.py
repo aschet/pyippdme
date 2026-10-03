@@ -40,15 +40,17 @@ from pyippdme.server import IppDmeServer
 from pyippdme.server import builders as server_builders
 from pyippdme.server._util import generic_set_prop
 from pyippdme.server.backend import MachineBackend
+from pyippdme.server.motion import MotionModel, ToolHandler
 from pyippdme.server.registry import CommandContext, CommandRegistry, component_name
-from pyippdme.server.surface import SampleSurface
+from pyippdme.server.surface import RawSensor, SampleSurface
 from pyippdme.simulation import DEFAULT_COMMAND_CLASSES
 from pyippdme.simulation.backend import SimulatedBackend
 from pyippdme.simulation.classes.cartcmm_class import pt_meas_fields
-from pyippdme.simulation.classes.tool_class import DEFAULT_TOOL_COLLECTION, TOOL_CATALOG
+from pyippdme.simulation.classes.tool_class import TOOL_CATALOG, collection_root
 from pyippdme.simulation.classes.toolchanger_class import activate_tool
 from pyippdme.simulation.state import SimulationState
 from pyippdme.types.csy import CsyStore, FileCsyStore
+from pyippdme.types.toolcollection import find_node
 from pyippdme.types.vec3 import Vec3
 
 #: 6.4.1's naming scheme's four purely presence-based top-level objects:
@@ -125,6 +127,9 @@ class VirtualCMM(IppDmeServer[SimulationState]):
         command_classes: Sequence[Callable[[CommandRegistry], None]] = DEFAULT_COMMAND_CLASSES,
         network: Network = TCP_NETWORK,
         sample_surface: SampleSurface | None = None,
+        raw_sensor: RawSensor | None = None,
+        motion: MotionModel | None = None,
+        tool_handler: ToolHandler | None = None,
         on_line_received: LineHook | None = None,
         on_line_sent: LineHook | None = None,
         on_connect: Callable[[str], None] | None = None,
@@ -142,6 +147,9 @@ class VirtualCMM(IppDmeServer[SimulationState]):
             state_factory=SimulationState,
             network=network,
             sample_surface=sample_surface,
+            raw_sensor=raw_sensor,
+            motion=motion,
+            tool_handler=tool_handler,
             on_line_received=on_line_received,
             on_line_sent=on_line_sent,
             on_connect=on_connect,
@@ -159,6 +167,9 @@ class VirtualCMM(IppDmeServer[SimulationState]):
             csy_store=self.csy_store,
             cancel=asyncio.Event(),
             sample_surface=self.sample_surface,
+            raw_sensor=self.raw_sensor,
+            motion=self.motion,
+            tool_handler=self.tool_handler,
             network=self.network,
         )
 
@@ -211,7 +222,7 @@ class VirtualCMM(IppDmeServer[SimulationState]):
     async def open_tool_collection(self, path: str) -> bool:
         """Open a tool collection at the machine: the client gets ``OpenToolCollection(path)``."""
         state = self.active_state
-        if state is None or path != DEFAULT_TOOL_COLLECTION:
+        if state is None or find_node(collection_root(), path) is None:
             return False
         return await self.send_event(server_builders.tool_collection_opened(path))
 

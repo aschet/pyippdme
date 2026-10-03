@@ -38,7 +38,7 @@ fresh tag when it actually sends the command regardless, so the original
 tag's value is never used for anything.
 
 Limitation: a script that starts a daemon (``OnMoveReport``/
-``OnMoveReportE``, see :mod:`pyippdme.cli._interaction`) and later
+``OnMoveReportE``, see :mod:`pyippdme.client.interaction`) and later
 ``StopDaemon(<tag>)``s it is only reliably replayable if it's run in full,
 in its original order, by this same client implementation - the ``tag``
 baked into that ``StopDaemon`` call is a snapshot of whichever
@@ -61,7 +61,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
 
-from pyippdme.cli._interaction import (
+from pyippdme.client import IppDmeClient
+from pyippdme.client.interaction import (
     Acked,
     Completed,
     ConnectionLost,
@@ -71,7 +72,6 @@ from pyippdme.cli._interaction import (
     format_error,
     run_command_line,
 )
-from pyippdme.client import IppDmeClient
 from pyippdme.protocol.network import MemoryNetwork
 from pyippdme.server import IppDmeServer
 from pyippdme.simulation.state import SimulationState
@@ -114,9 +114,9 @@ async def start_embedded_server() -> tuple[str, int, IppDmeServer[SimulationStat
     :mod:`pyippdme.cli.tui`), since the TUI's app-lifecycle logging makes
     sharing this one awkward, not because the logic itself differs.
     """
-    from pyippdme.simulation.virtual_cmm import VirtualCMM
+    from pyippdme.cli.virtual import create_embedded
 
-    server = VirtualCMM(network=MemoryNetwork())
+    server = create_embedded(MemoryNetwork())
     port = await server.start()
     return VIRTUAL_HOST, port, server
 

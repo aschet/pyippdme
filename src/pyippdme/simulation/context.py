@@ -20,5 +20,20 @@ from typing import TypeAlias
 
 from pyippdme.server.registry import CommandContext
 from pyippdme.simulation.state import SimulationState
+from pyippdme.types.csy import CsyContext
 
 Ctx: TypeAlias = CommandContext[SimulationState]
+
+
+def csy_context(ctx: Ctx) -> CsyContext:
+    """Return the client's coordinate system chain: the active CSY and the transformations it set.
+
+    A motion model that knows more than the commands set (the rotary table's angle) supplies the
+    complete context itself.
+    """
+    if ctx.motion is not None:
+        provided = ctx.motion.csy_context()
+        if provided is not None:
+            return provided
+    cart = ctx.state.cart_cmm
+    return CsyContext(cart.active_csy, cart.csy_transformations)

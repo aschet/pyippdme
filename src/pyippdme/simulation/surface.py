@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import math
 
-from pyippdme.types.vec3 import Vec3, add, dot, normalize, scale, sub
+from pyippdme.server.surface import SampleSurface
+from pyippdme.types.vec3 import Vec3, add, dot, norm, normalize, scale, sub
 
 #: Below this, a ray is treated as parallel to a surface rather than
 #: technically intersecting it at a huge, meaningless distance.
@@ -92,6 +93,41 @@ class CylinderSurface:
         if t is None:
             return None
         return add(origin, scale(unit, t))
+
+
+class CompositeSurface:
+    """Several surfaces as one: a probing ray meets the nearest of them."""
+
+    def __init__(self, surfaces: list[SampleSurface]) -> None:
+        self._surfaces = list(surfaces)
+
+    def intersect(self, origin: Vec3, direction: Vec3) -> Vec3 | None:
+        hits = [h for s in self._surfaces if (h := s.intersect(origin, direction)) is not None]
+        if not hits:
+            return None
+        return min(hits, key=lambda h: norm(sub(h, origin)))
+
+
+def parse_surface(spec: str) -> SampleSurface:
+    """Parse ``plane:px,py,pz:nx,ny,nz``, ``sphere:cx,cy,cz:r`` or ``cylinder:p:a:r``."""
+    kind, *parts = spec.split(":")
+
+    def vector(text: str) -> Vec3:
+        x, y, z = (float(v) for v in text.split(","))
+        return (x, y, z)
+
+    try:
+        if kind == "plane" and len(parts) == 2:
+            return PlaneSurface(vector(parts[0]), vector(parts[1]))
+        if kind == "sphere" and len(parts) == 2:
+            return SphereSurface(vector(parts[0]), float(parts[1]))
+        if kind == "cylinder" and len(parts) == 3:
+            return CylinderSurface(vector(parts[0]), vector(parts[1]), float(parts[2]))
+    except ValueError as exc:
+        raise ValueError(f"bad numbers in surface {spec!r}: {exc}") from None
+    raise ValueError(
+        f"bad surface {spec!r}; use plane:P:N, sphere:C:R or cylinder:P:AXIS:R with points as x,y,z"
+    )
 
 
 def _nearest_nonnegative(t1: float, t2: float) -> float | None:

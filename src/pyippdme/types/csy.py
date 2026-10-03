@@ -20,21 +20,21 @@ the named coordinate systems ``SaveNamedCsyTransformation``/
 after rebooting" (6.5.2).
 
 Scope note: :mod:`pyippdme.simulation.classes.cartcmm_class`'s command handlers store
-and return these transforms faithfully, but the simulated ``Get``/``GoTo``
+and return these transforms faithfully, but the minimal simulated ``Get``/``GoTo``
 handlers do *not* apply them to convert reported/commanded coordinates
-between CSYs - that would require committing to a specific interpretation of
-the full transformation chain across all six CSYs, which Figure 12 (a
-diagram this library cannot extract from the PDF) defines but the
-surrounding prose does not fully spell out. A real integrator wiring this
-library to actual hardware is expected to call :meth:`CoordinateTransform.apply`
-themselves when composing the chain their machine actually implements.
+between CSYs: they have no machine coordinates to convert to. The chain across the
+CSYs is defined by Figure 12 (a diagram this library cannot extract from the PDF); this module
+commits to one reading of it, :data:`CSY_CHAIN` and :func:`chain_matrix`, which
+:mod:`pyippdme.twin` applies. A machine with a different chain can compose its own with
+:meth:`CoordinateTransform.apply`.
 """
 
 from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -54,6 +54,23 @@ LIVE_TRANSFORM_NAMES = (
     "MoveableMachineCsy",
     "MultipleArmCsy",
     "RotaryTableFixCsy",
+)
+
+
+#: The transformation chain of a CartCMM (6.5.1, Figure 12), from the machine to the part.
+#: Coordinates of ``PartCsy`` pass through ``RotaryTableVarCsy``, ``RotaryTableFixCsy``,
+#: ``MoveableMachineCsy`` and ``MultipleArmCsy`` into ``MachineCsy``. Each CSY is placed relative to
+#: the one before it in this tuple with ``SetCsyTransformation`` (6.5.2), and
+#: ``SetCoordSystem`` chooses where a client enters the chain. The offset of the tool is
+#: included in all of them. ``RotaryTableVarCsy`` and ``MoveableMachineCsy`` are in the figure
+#: for consistency (the rotary table's angle and movable measuring equipment).
+CSY_CHAIN = (
+    "MachineCsy",
+    "MultipleArmCsy",
+    "MoveableMachineCsy",
+    "RotaryTableFixCsy",
+    "RotaryTableVarCsy",
+    "PartCsy",
 )
 
 
@@ -88,9 +105,26 @@ class CoordinateTransform:
         return 0.0 <= self.theta <= 180.0
 
     def rotation_matrix(self) -> npt.NDArray[np.float64]:
-        """Compute the proper Euler rotation matrix ``Rz(Phi) @ Rx(Theta) @ Rz(Psi)``."""
+        """Return the rotation from child to parent coordinates: ``Rz(Psi) @ Rx(Theta) @ Rz(Phi)``.
+
+        The standard (6.5.1, Figure 12 text) defines the transformation from the parent to the
+        child CSY as ``p' = R(phi, theta, psi) . (p - t)`` with::
+
+            R = [[ cos phi, sin phi, 0], [-sin phi, cos phi, 0], [0, 0, 1]]
+              . [[1, 0, 0], [0, cos theta, sin theta], [0, -sin theta, cos theta]]
+              . [[ cos psi, sin psi, 0], [-sin psi, cos psi, 0], [0, 0, 1]]
+
+        Those are rotations of the axes (the transpose of the usual rotation matrices), so the
+        child-to-parent direction this method returns is the transpose of ``R``, which is
+        ``Rz(psi) Rx(theta) Rz(phi)`` in the usual notation (``phi`` and ``psi`` swap places).
+        """
         phi, theta, psi = (math.radians(a) for a in (self.phi, self.theta, self.psi))
-        return _rotation_z(phi) @ _rotation_x(theta) @ _rotation_z(psi)
+        return _rotation_z(psi) @ _rotation_x(theta) @ _rotation_z(phi)
+
+    def parent_to_child(self, point: Vec3) -> Vec3:
+        """Transform ``point`` from the parent CSY into the child CSY: ``R . (p - t)`` (6.5.1)."""
+        t = np.array((self.x0, self.y0, self.z0))
+        return from_array(self.rotation_matrix().T @ (to_array(point) - t))
 
     def apply(self, point: Vec3) -> Vec3:
         """Transform ``point`` from the child CSY into the parent CSY: ``R @ p + t``."""
@@ -107,6 +141,87 @@ class CoordinateTransform:
         )
 
 
+def transform_matrix(transform: CoordinateTransform) -> npt.NDArray[np.float64]:
+    """Return the 4x4 homogeneous matrix of ``transform`` (child to parent coordinates)."""
+    m = np.eye(4)
+    m[:3, :3] = transform.rotation_matrix()
+    m[:3, 3] = (transform.x0, transform.y0, transform.z0)
+    return m
+
+
+def chain_matrix(
+    active: str,
+    transforms: Mapping[str, CoordinateTransform],
+    rotary_var: npt.NDArray[np.float64] | None = None,
+) -> npt.NDArray[np.float64]:
+    """Return the 4x4 matrix that maps points of the ``active`` CSY into ``MachineCsy``.
+
+    ``transforms`` holds the live transformations of the CSYs of :data:`CSY_CHAIN` by name (a
+    CSY without one is placed at its parent). ``RotaryTableVarCsy`` is not set by a command
+    but follows the rotary table: pass its 4x4 matrix as ``rotary_var``, or ``None`` while that
+    calculation is not enabled. An unknown ``active`` name (``MachineCsy`` included) is the
+    identity.
+    """
+    if active not in CSY_CHAIN:
+        return np.eye(4)
+    result = np.eye(4)
+    for name in CSY_CHAIN[1 : CSY_CHAIN.index(active) + 1]:
+        if name == "RotaryTableVarCsy":
+            step = rotary_var if rotary_var is not None else np.eye(4)
+        else:
+            transform = transforms.get(name)
+            step = transform_matrix(transform) if transform is not None else np.eye(4)
+        result = result @ step
+    return result
+
+
+@dataclass(frozen=True, slots=True)
+class CsyContext:
+    """The coordinate system a client works in, and how it sits in the machine (6.5.1, 6.5.2).
+
+    This is what a server needs to turn the coordinates of a command into machine
+    coordinates and a result back into the client's: the CSY the client activated with
+    ``SetCoordSystem``, the live transformations it set with ``SetCsyTransformation`` and
+    ``LoadCoordSystem`` (by CSY name, each relative to the one before it in
+    :data:`CSY_CHAIN`), and, while the rotary table's own system is calculated, that
+    system's 4x4 matrix::
+
+        context = CsyContext("PartCsy", {"PartCsy": CoordinateTransform(100, 0, 0, 0, 0, 90)})
+        machine_point = context.to_machine((10, 0, 0))
+        client_point = context.to_client(machine_point)
+        probing = context.direction_to_machine((0, 0, 1))   # IJK, tool axis: rotation only
+
+    Points and directions are separate because a direction is not moved by a translation.
+    """
+
+    active: str = "MachineCsy"
+    transforms: Mapping[str, CoordinateTransform] = field(default_factory=dict)
+    #: Matrix of ``RotaryTableVarCsy`` (the rotary table's angle) while it is calculated.
+    rotary_var: npt.NDArray[np.float64] | None = None
+
+    def matrix(self) -> npt.NDArray[np.float64]:
+        """Return the 4x4 matrix mapping the active CSY into ``MachineCsy``."""
+        return chain_matrix(self.active, self.transforms, self.rotary_var)
+
+    def to_machine(self, point: Vec3) -> Vec3:
+        """Convert a point of the active CSY to machine coordinates."""
+        m = self.matrix()
+        return from_array(m[:3, :3] @ to_array(point) + m[:3, 3])
+
+    def to_client(self, point: Vec3) -> Vec3:
+        """Convert a machine point to the active CSY."""
+        m = self.matrix()
+        return from_array(m[:3, :3].T @ (to_array(point) - m[:3, 3]))
+
+    def direction_to_machine(self, vector: Vec3) -> Vec3:
+        """Convert a direction of the active CSY to machine coordinates (rotation only)."""
+        return from_array(self.matrix()[:3, :3] @ to_array(vector))
+
+    def direction_to_client(self, vector: Vec3) -> Vec3:
+        """Convert a machine direction to the active CSY (rotation only)."""
+        return from_array(self.matrix()[:3, :3].T @ to_array(vector))
+
+
 def _rotation_z(angle: float) -> npt.NDArray[np.float64]:
     c, s = math.cos(angle), math.sin(angle)
     return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
@@ -118,17 +233,16 @@ def _rotation_x(angle: float) -> npt.NDArray[np.float64]:
 
 
 def _euler_angles_from_matrix(r: npt.NDArray[np.float64]) -> tuple[float, float, float]:
-    """Recover ``(phi, theta, psi)`` in degrees from a Z-X'-Z'' rotation matrix."""
+    """Recover ``(phi, theta, psi)`` in degrees from ``Rz(psi) Rx(theta) Rz(phi)``."""
     theta = math.degrees(math.acos(np.clip(r[2, 2], -1.0, 1.0)))
     if abs(r[2, 2]) < 1.0 - 1e-9:
-        phi = math.degrees(math.atan2(r[0, 2], -r[1, 2]))
-        psi = math.degrees(math.atan2(r[2, 0], r[2, 1]))
+        psi = math.degrees(math.atan2(r[0, 2], -r[1, 2]))
+        phi = math.degrees(math.atan2(r[2, 0], r[2, 1]))
     else:
-        # Gimbal lock (theta == 0 or 180): phi and psi are not individually
-        # observable, only their sum/difference is. Attribute the whole
-        # rotation to phi, leaving psi at 0.
-        phi = math.degrees(math.atan2(r[1, 0], r[0, 0]))
-        psi = 0.0
+        # Gimbal lock: only one combination of phi and psi shows. At theta = 0 the rotation is
+        # Rz(psi + phi), at theta = 180 it is Rz(psi - phi) mirrored; attribute it to one angle.
+        angle = math.degrees(math.atan2(r[1, 0], r[0, 0]))
+        phi, psi = (angle, 0.0) if r[2, 2] > 0 else (0.0, angle)
     return phi, theta, psi
 
 

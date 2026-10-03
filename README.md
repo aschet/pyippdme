@@ -36,6 +36,17 @@ Implemented so far:
   responses, not real simulations.
 - Networks: connections run over TCP by default, or over an in-memory
   network inside the process, without opening a port.
+- Digital twin and simulator window: `ippdme gui` opens a Qt window with a visible
+  bridge CMM that a client connects to over TCP. It runs timed moves with machine limits and
+  collision checking, probes CAD samples loaded from STEP/IGES/STL files with an MPE-style
+  measuring error, simulates a laser line scanner for raw data, and builds the machine from
+  STEP files. The simulation (`pyippdme.twin`) has no GUI dependency.
+- Command client window: `ippdme client-gui` (or `--virtual` for a machine started inside the
+  window) connects to any server and runs commands from dialogs with icons: move, measure a
+  point, scan a line/circle/helix, change tool, set speeds, plus a form for every command of the
+  protocol and a command line. The status bar shows the machine position, the homing state and
+  errors; measured points can be copied as CSV. The protocol work (`pyippdme.client.host`,
+  `pyippdme.client.recipes`, `pyippdme.client.commandform`) has no GUI dependency.
 - Spy: a transparent proxy that logs the traffic between a client and a
   server.
 - CLI and TUI: `ippdme client`, `ippdme serve`, `ippdme spy` and a
@@ -50,6 +61,10 @@ The documentation lists where this package deviates from the standard.
 pip install -e . --group dev
 # for the full-screen TUI:
 pip install -e ".[tui]"
+# for the simulator window (PySide6) and CAD (OpenCASCADE):
+pip install -e ".[gui]"
+ippdme gui --start
+ippdme client-gui --virtual
 ```
 
 ## Quickstart

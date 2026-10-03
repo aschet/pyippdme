@@ -118,3 +118,30 @@ API Reference
 
 .. automodule:: pyippdme.spy
    :members:
+
+.. automodule:: pyippdme.server.motion
+   :members:
+
+.. automodule:: pyippdme.server.surface
+   :members:
+
+.. automodule:: pyippdme.client.host
+   :members:
+
+.. automodule:: pyippdme.client.recipes
+   :members:
+
+.. automodule:: pyippdme.client.commandform
+   :members:
+
+.. automodule:: pyippdme.client.optical
+   :members:
+
+.. automodule:: pyippdme.server.contour
+   :members:
+
+.. automodule:: pyippdme.types.toolcollection
+   :members:
+
+.. automodule:: pyippdme.types.obb
+   :members:

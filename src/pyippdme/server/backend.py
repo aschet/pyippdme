@@ -31,8 +31,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Protocol, TypeAlias
+from typing import Protocol, TypeAlias, runtime_checkable
 
+from pyippdme.server.contour import ContourScan
 from pyippdme.types.vec3 import Vec3
 
 #: Signalled (via ``.set()``) when a running operation must stop as soon as
@@ -79,3 +80,17 @@ class MachineBackend(Protocol):
         pitch: float,
         cancel: CancellationToken,
     ) -> AsyncIterator[Vec3]: ...
+
+
+@runtime_checkable
+class ContourBackend(Protocol):
+    """Optional part of a :class:`MachineBackend`: follow the real surface of a part.
+
+    For the five unknown-contour scans (6.13.2.2, Figures 35-39). See
+    :mod:`pyippdme.server.contour` for the request and
+    :func:`~pyippdme.server.contour.trace_contour` for an algorithm that follows a surface given
+    a function that probes it. Without it those scans fall back to a straight line towards their
+    stop element.
+    """
+
+    def scan_contour(self, scan: ContourScan, cancel: CancellationToken) -> AsyncIterator[Vec3]: ...

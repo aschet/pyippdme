@@ -44,7 +44,8 @@ from pyippdme.protocol.namespace import proprietary_name
 from pyippdme.protocol.network import TCP_NETWORK, Network
 from pyippdme.protocol.signature import Parameter
 from pyippdme.server.backend import CancellationToken, MachineBackend
-from pyippdme.server.surface import SampleSurface
+from pyippdme.server.motion import MotionModel, ToolHandler
+from pyippdme.server.surface import RawSensor, SampleSurface
 from pyippdme.types.csy import CsyStore
 
 HandlerResult: TypeAlias = DataPayload | Sequence[DataPayload] | AsyncIterator[DataPayload] | None
@@ -124,6 +125,9 @@ class MachineState:
     session_active: bool = False
     active_error: ServerError | None = None
     homed: bool = False
+    #: Where ``Home()`` left the machine in the coordinates a client sees; ``None`` if the
+    #: machine's own home position applies (set by a motion model, see ``MotionModel.home``).
+    home_position: tuple[float, float, float] | None = None
     machine_class: str | tuple[str, ...] = DEFAULT_MACHINE_CLASS
     dme_version: str = "2.5"
     #: Generic fallback store for SetProp/GetProp on properties not modeled
@@ -166,6 +170,14 @@ class CommandContext(Generic[StateT]):
     #: ``PtMeas`` reporting the commanded position exactly, as if nothing
     #: were ever really touched.
     sample_surface: SampleSurface | None = None
+    #: The simulated optical sensor ``DataAcquire`` uses, if any; see
+    #: :class:`~pyippdme.server.surface.RawSensor`.
+    raw_sensor: RawSensor | None = None
+    #: What carries out a move (time, limits, collisions); see
+    #: :class:`~pyippdme.server.motion.MotionModel`. ``None``: moves are instant.
+    motion: MotionModel | None = None
+    #: Tool change and qualification; see :class:`~pyippdme.server.motion.ToolHandler`.
+    tool_handler: ToolHandler | None = None
     #: Where a handler that has to open its own connection or listener (the
     #: raw-data binary socket, 6.17.2.1) gets it from; the server's own
     #: :class:`~pyippdme.protocol.network.Network`.

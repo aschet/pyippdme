@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from pyippdme.types.pointcloud import PointCloudSet
 from pyippdme.types.vec3 import Vec3
 
 
@@ -42,3 +43,24 @@ class SampleSurface(Protocol):
     """
 
     def intersect(self, origin: Vec3, direction: Vec3) -> Vec3 | None: ...
+
+
+@runtime_checkable
+class RawSensor(Protocol):
+    """A simulated optical/laser sensor that answers ``DataAcquire`` (6.15.1).
+
+    Without one, ``DataAcquire`` synthesizes points from the requested
+    positions alone. With one, the sensor decides what it sees: ``positions``
+    and ``directions`` are the control points the client sent (one per
+    ``n``; a single TCP position for ``n == 0``), ``acquisition_type`` is
+    ``SingleShot``, ``MultiShot`` or ``Sweep``. Return ``None`` to fall back
+    to the built-in synthesis.
+    """
+
+    def acquire(
+        self,
+        acq_name: str,
+        acquisition_type: str,
+        positions: list[Vec3],
+        directions: list[Vec3],
+    ) -> PointCloudSet | None: ...

@@ -51,32 +51,19 @@ to otherwise act on, matching how ``sfa`` is already accepted and unused by
 ``ScanOnCircle``.
 
 All five unknown-contour scans (6.13.2.2: ``ScanInPlaneEndIsSphere``/
-``EndIsPlane``/``EndIsCyl``, ``ScanInCylEndIsSphere``/``EndIsPlane``) are
-implemented, deliberately simplified. "Unknown contour" scanning is
-inherently adaptive - the server is meant to follow a real, physically
-probed surface it does not know the shape of in advance - which this
-project's simulation (no part geometry at all, see
-:mod:`pyippdme.simulation.classes.cartcmm_class`) cannot do faithfully, and
-attempting a genuine contour-tracing algorithm here would trade one
-incomplete feature for another rather than giving users something they
-can actually run their own client commands against today. Each command
-instead runs a straight-line scan (reusing the same
+``EndIsPlane``/``EndIsCyl``, ``ScanInCylEndIsSphere``/``EndIsPlane``) follow
+the real contour when the backend implements ``scan_contour`` (the digital
+twin does, see :mod:`pyippdme.server.contour`): the path is traced over the
+placed CAD part until the stop element is reached ``n`` times. Without such a
+backend they fall back to a simplified straight-line scan (reusing the same
 ``ctx.backend.scan_line`` geometry as ``ScanOnLine``) aimed directly at
 the stop criterion's own reference point/center - the sphere's ``Ex, Ey,
 Ez``, the plane's ``Px, Py, Pz``, or the stop cylinder's axis base point
-``Cx, Cy, Cz`` - with that stop criterion then applied as a real,
-per-point cutoff on top of the resulting stream (sphere/cylinder:
-distance to center/axis within ``Dia``/``d``; plane: each point past the
-plane, by sign of its distance to ``Pi,Pj,Pk``, counts once - the plane
-line is extended a little past its own point first, since unlike a
-sphere or cylinder a plane has no interior to linger in). ``Dx, Dy, Dz``
-(the "direction point") is validated per each command's one explicit
-constraint (non-coincident with the start point) but does not otherwise
-steer the (straight-line) path, since the path already aims at a fixed
-target derived from the stop criterion; the spec's own "start checking
-the stop criterion only after moving further than dist(start, direction
-point)" rule is likewise not modeled, since it exists for genuine
-adaptive tracing this simplification does not attempt. The two
+``Cx, Cy, Cz`` - with that stop criterion applied as a per-point cutoff
+(sphere/cylinder: distance to center/axis within ``Dia``/``d``; plane: each
+point past the plane counts once). In that fallback ``Dx, Dy, Dz`` is only
+validated, and the spec's rule to start checking the stop criterion after
+moving further than dist(start, direction point) is not modeled. The two
 scanning-cylinder commands have no scanning-plane normal argument to
 validate/report an orientation from, unlike the three scanning-plane
 ones - the cylinder axis direction (``Ci,Cj,Ck``) is reused for
@@ -110,6 +97,7 @@ does not change the stream.
 
 from __future__ import annotations
 
+import math
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
@@ -129,8 +117,10 @@ from pyippdme.server._util import (
     incorrect_arguments,
     positional_numbers,
 )
-from pyippdme.server.backend import MachineBackend
+from pyippdme.server.backend import ContourBackend, MachineBackend
+from pyippdme.server.contour import ContourConstraint, ContourScan, ContourStop
 from pyippdme.server.registry import CommandRegistry, HandlerResult
+from pyippdme.simulation.classes.cartcmm_class import implicit_pt_meas
 from pyippdme.simulation.classes.tool_class import (
     require_measuring_tool,
     tool_alignment_numbers,
@@ -624,11 +614,23 @@ async def _scan_on_curve(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     return _stream()
 
 
+def _surface_direction(center: Vec3, start: Vec3, axis: Vec3, sfa_deg: float) -> Vec3:
+    """Return the direction from the surface to the probe at the start of a circle or helix.
+
+    The surface angle ``sfa`` turns the radial direction towards the axis: 0 is the outside of
+    a cylinder (the probe stands outside), 180 the inside, 90 and 270 a plane.
+    """
+    radial = sub(start, center)
+    radial = normalize(sub(radial, scale(axis, dot(radial, axis))))
+    angle = math.radians(sfa_deg)
+    return normalize(add(scale(radial, math.cos(angle)), scale(axis, math.sin(angle))))
+
+
 async def _scan_on_circle(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     values = positional_numbers(
         args, CommandName.SCAN_ON_CIRCLE, *argument_count_bounds(_SCAN_ON_CIRCLE_PARAMS)
     )
-    cx, cy, cz, sx, sy, sz, i, j, k, delta, _sfa, step_w = values[:12]
+    cx, cy, cz, sx, sy, sz, i, j, k, delta, sfa, step_w = values[:12]
     # RT (values[12], if present) is accepted but ignored: rotary-table motion is not simulated.
     center: Vec3 = (cx, cy, cz)
     start: Vec3 = (sx, sy, sz)
@@ -648,6 +650,7 @@ async def _scan_on_circle(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult
     ctx.state.mover.user_enabled = False
 
     async def _stream() -> AsyncIterator[NumericData]:
+        await implicit_pt_meas(ctx, start, _surface_direction(center, start, unit_normal, sfa))
         async for point in backend.scan_circle(center, start, normal, delta, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
             yield NumericData(_report_values(ctx, point, unit_normal, CommandName.SCAN_ON_CIRCLE))
@@ -681,6 +684,7 @@ async def _scan_on_helix(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     ctx.state.mover.user_enabled = False
 
     async def _stream() -> AsyncIterator[NumericData]:
+        await implicit_pt_meas(ctx, start, _surface_direction(center, start, unit_normal, sfa))
         async for point in backend.scan_helix(
             center, start, normal, delta, step_w, pitch, ctx.cancel
         ):
@@ -714,6 +718,7 @@ async def _scan_on_line(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     ctx.state.mover.user_enabled = False
 
     async def _stream() -> AsyncIterator[NumericData]:
+        await implicit_pt_meas(ctx, start, unit_normal)
         async for point in backend.scan_line(start, end, normal, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
             yield NumericData(_report_values(ctx, point, unit_normal, CommandName.SCAN_ON_LINE))
@@ -753,6 +758,32 @@ async def _scan_unknown_density(_ctx: Ctx, args: tuple[Argument, ...]) -> Handle
     return None
 
 
+def _contour_stream(
+    ctx: Ctx, backend: MachineBackend, cause: str, scan: ContourScan
+) -> AsyncIterator[NumericData] | None:
+    """Follow the real contour if the backend can (6.13.2.2, Figures 35-39), else ``None``.
+
+    A backend that can probe a surface implements ``scan_contour``; without one the legacy
+    straight-line approximation below is used.
+    """
+    if not isinstance(backend, ContourBackend):
+        return None
+    ctx.state.mover.user_enabled = False
+    try:
+        reference = normalize(scan.probe)
+    except ValueError:
+        reference = (0.0, 0.0, 1.0)
+
+    async def _stream() -> AsyncIterator[NumericData]:
+        if norm(scan.probe) > 0.0:
+            await implicit_pt_meas(ctx, scan.start, normalize(scan.probe))
+        async for point in backend.scan_contour(scan, ctx.cancel):
+            ctx.state.cart_cmm.position = point
+            yield NumericData(_report_values(ctx, point, reference, cause))
+
+    return _stream()
+
+
 async def _scan_in_plane_end_is_sphere(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     bounds = argument_count_bounds(_SCAN_IN_PLANE_END_IS_SPHERE_PARAMS)
     values = positional_numbers(args, CommandName.SCAN_IN_PLANE_END_IS_SPHERE, *bounds)
@@ -760,9 +791,9 @@ async def _scan_in_plane_end_is_sphere(ctx: Ctx, args: tuple[Argument, ...]) -> 
         sx,
         sy,
         sz,
-        _si,
-        _sj,
-        _sk,
+        si,
+        sj,
+        sk,
         ni,
         nj,
         nk,
@@ -775,9 +806,9 @@ async def _scan_in_plane_end_is_sphere(ctx: Ctx, args: tuple[Argument, ...]) -> 
         ez,
         dia,
         n_raw,
-        _ei,
-        _ej,
-        _ek,
+        ei,
+        ej,
+        ek,
     ) = values
     start: Vec3 = (sx, sy, sz)
     end: Vec3 = (ex, ey, ez)
@@ -803,6 +834,23 @@ async def _scan_in_plane_end_is_sphere(ctx: Ctx, args: tuple[Argument, ...]) -> 
         )
     unit_normal = normalize(normal)
     backend = _require_backend(ctx, CommandName.SCAN_IN_PLANE_END_IS_SPHERE)
+    contour = _contour_stream(
+        ctx,
+        backend,
+        CommandName.SCAN_IN_PLANE_END_IS_SPHERE,
+        ContourScan(
+            ContourConstraint("plane", normal=normal),
+            start,
+            (si, sj, sk),
+            direction_point,
+            step_w,
+            ContourStop("sphere", end, None, dia),
+            n,
+            (ei, ej, ek),
+        ),
+    )
+    if contour is not None:
+        return contour
 
     ctx.state.mover.user_enabled = False
 
@@ -838,9 +886,9 @@ async def _scan_in_plane_end_is_plane(ctx: Ctx, args: tuple[Argument, ...]) -> H
         sx,
         sy,
         sz,
-        _si,
-        _sj,
-        _sk,
+        si,
+        sj,
+        sk,
         ni,
         nj,
         nk,
@@ -855,9 +903,9 @@ async def _scan_in_plane_end_is_plane(ctx: Ctx, args: tuple[Argument, ...]) -> H
         pj,
         pk,
         n_raw,
-        _ei,
-        _ej,
-        _ek,
+        ei,
+        ej,
+        ek,
     ) = values
     start: Vec3 = (sx, sy, sz)
     plane_point: Vec3 = (px, py, pz)
@@ -899,6 +947,23 @@ async def _scan_in_plane_end_is_plane(ctx: Ctx, args: tuple[Argument, ...]) -> H
     end = add(plane_point, scale(path_unit, step_w * n))
     start_side = _plane_side(start, plane_point, plane_normal_unit)
     backend = _require_backend(ctx, CommandName.SCAN_IN_PLANE_END_IS_PLANE)
+    contour = _contour_stream(
+        ctx,
+        backend,
+        CommandName.SCAN_IN_PLANE_END_IS_PLANE,
+        ContourScan(
+            ContourConstraint("plane", normal=normal),
+            start,
+            (si, sj, sk),
+            direction_point,
+            step_w,
+            ContourStop("plane", plane_point, (pi, pj, pk)),
+            n,
+            (ei, ej, ek),
+        ),
+    )
+    if contour is not None:
+        return contour
 
     ctx.state.mover.user_enabled = False
 
@@ -925,9 +990,9 @@ async def _scan_in_plane_end_is_cyl(ctx: Ctx, args: tuple[Argument, ...]) -> Han
         sx,
         sy,
         sz,
-        _si,
-        _sj,
-        _sk,
+        si,
+        sj,
+        sk,
         ni,
         nj,
         nk,
@@ -943,9 +1008,9 @@ async def _scan_in_plane_end_is_cyl(ctx: Ctx, args: tuple[Argument, ...]) -> Han
         ck,
         d,
         n_raw,
-        _ei,
-        _ej,
-        _ek,
+        ei,
+        ej,
+        ek,
     ) = values
     start: Vec3 = (sx, sy, sz)
     axis_point: Vec3 = (cx, cy, cz)
@@ -978,6 +1043,23 @@ async def _scan_in_plane_end_is_cyl(ctx: Ctx, args: tuple[Argument, ...]) -> Han
     unit_normal = normalize(normal)
     end = axis_point  # simplified straight-line scan (see module docstring)
     backend = _require_backend(ctx, CommandName.SCAN_IN_PLANE_END_IS_CYL)
+    contour = _contour_stream(
+        ctx,
+        backend,
+        CommandName.SCAN_IN_PLANE_END_IS_CYL,
+        ContourScan(
+            ContourConstraint("plane", normal=normal),
+            start,
+            (si, sj, sk),
+            direction_point,
+            step_w,
+            ContourStop("cylinder", axis_point, (ci, cj, ck), d),
+            n,
+            (ei, ej, ek),
+        ),
+    )
+    if contour is not None:
+        return contour
 
     ctx.state.mover.user_enabled = False
 
@@ -1009,9 +1091,9 @@ async def _scan_in_cyl_end_is_sphere(ctx: Ctx, args: tuple[Argument, ...]) -> Ha
         sx,
         sy,
         sz,
-        _si,
-        _sj,
-        _sk,
+        si,
+        sj,
+        sk,
         dx,
         dy,
         dz,
@@ -1021,9 +1103,9 @@ async def _scan_in_cyl_end_is_sphere(ctx: Ctx, args: tuple[Argument, ...]) -> Ha
         ez,
         dia,
         n_raw,
-        _ei,
-        _ej,
-        _ek,
+        ei,
+        ej,
+        ek,
     ) = values
     start: Vec3 = (sx, sy, sz)
     end: Vec3 = (ex, ey, ez)
@@ -1053,6 +1135,23 @@ async def _scan_in_cyl_end_is_sphere(ctx: Ctx, args: tuple[Argument, ...]) -> Ha
             "The start point may not lie on the cylinder axis",
         )
     backend = _require_backend(ctx, CommandName.SCAN_IN_CYL_END_IS_SPHERE)
+    contour = _contour_stream(
+        ctx,
+        backend,
+        CommandName.SCAN_IN_CYL_END_IS_SPHERE,
+        ContourScan(
+            ContourConstraint("cylinder", axis_point=axis_point, axis=(ci, cj, ck)),
+            start,
+            (si, sj, sk),
+            direction_point,
+            step_w,
+            ContourStop("sphere", end, None, dia),
+            n,
+            (ei, ej, ek),
+        ),
+    )
+    if contour is not None:
+        return contour
 
     ctx.state.mover.user_enabled = False
 
@@ -1087,9 +1186,9 @@ async def _scan_in_cyl_end_is_plane(ctx: Ctx, args: tuple[Argument, ...]) -> Han
         sx,
         sy,
         sz,
-        _si,
-        _sj,
-        _sk,
+        si,
+        sj,
+        sk,
         dx,
         dy,
         dz,
@@ -1101,9 +1200,9 @@ async def _scan_in_cyl_end_is_plane(ctx: Ctx, args: tuple[Argument, ...]) -> Han
         pj,
         pk,
         n_raw,
-        _ei,
-        _ej,
-        _ek,
+        ei,
+        ej,
+        ek,
     ) = values
     start: Vec3 = (sx, sy, sz)
     plane_point: Vec3 = (px, py, pz)
@@ -1136,6 +1235,23 @@ async def _scan_in_cyl_end_is_plane(ctx: Ctx, args: tuple[Argument, ...]) -> Han
     end = add(plane_point, scale(path_unit, step_w * n))
     start_side = _plane_side(start, plane_point, plane_normal_unit)
     backend = _require_backend(ctx, CommandName.SCAN_IN_CYL_END_IS_PLANE)
+    contour = _contour_stream(
+        ctx,
+        backend,
+        CommandName.SCAN_IN_CYL_END_IS_PLANE,
+        ContourScan(
+            ContourConstraint("cylinder", axis_point=axis_point, axis=(ci, cj, ck)),
+            start,
+            (si, sj, sk),
+            direction_point,
+            step_w,
+            ContourStop("plane", plane_point, (pi, pj, pk)),
+            n,
+            (ei, ej, ek),
+        ),
+    )
+    if contour is not None:
+        return contour
 
     ctx.state.mover.user_enabled = False
 

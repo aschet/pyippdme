@@ -42,12 +42,20 @@ from pyippdme.server._util import bad_argument
 from pyippdme.server.registry import CommandRegistry, HandlerResult
 from pyippdme.simulation.classes.mover_class import report_move
 from pyippdme.simulation.classes.tool_class import (
-    DEFAULT_TOOL_COLLECTION,
     TOOL_CATALOG,
     UNDEF_TOOL,
+    collection_root,
+    resolve_tool_name,
 )
 from pyippdme.simulation.context import Ctx
 from pyippdme.simulation.tool import default_tool_parameters
+from pyippdme.types.toolcollection import (
+    SEPARATOR,
+    children_of,
+    descendants_of,
+    find_node,
+    split_path,
+)
 from pyippdme.types.vec3 import Vec3, norm, sub
 
 _TOOL_NAME_PARAMS = (Parameter("ToolName", DataType.STRING, positional=True),)
@@ -74,36 +82,46 @@ def _require_node_name(args: tuple[Argument, ...], cause: str) -> str:
     return args[0].value
 
 
-def _require_root_collection(node_name: str, cause: str) -> None:
-    if node_name != DEFAULT_TOOL_COLLECTION:
-        raise ServerError(
-            ErrorSeverity.ERROR, ErrorCode.COLLECTION_NOT_FOUND, cause, "Collection not found"
-        )
+def _no_collection(cause: str) -> ServerError:
+    return ServerError(
+        ErrorSeverity.ERROR, ErrorCode.COLLECTION_NOT_FOUND, cause, "Collection not found"
+    )
+
+
+def _no_tool(cause: str) -> ServerError:
+    return ServerError(ErrorSeverity.ERROR, ErrorCode.TOOL_NOT_FOUND, cause, "Tool not found")
 
 
 async def _enum_tools(_ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
+    if not TOOL_CATALOG:  # Table 119: "Returned if there is no tool at all"
+        raise _no_tool(CommandName.ENUM_TOOLS)
     return builders.name_list(TOOL_CATALOG)
 
 
 async def _enum_tool_collection(_ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
+    """Return the direct children of a collection (Figure 56); the empty name is level 0."""
     node_name = _require_node_name(args, CommandName.ENUM_TOOL_COLLECTION)
-    _require_root_collection(node_name, CommandName.ENUM_TOOL_COLLECTION)
-    return [builders.property_entry(name, "Tool") for name in TOOL_CATALOG]
+    children = children_of(collection_root(), node_name)
+    if children is None:
+        raise _no_collection(CommandName.ENUM_TOOL_COLLECTION)
+    return [builders.property_entry(name, kind) for name, kind in children]
 
 
-async def _enum_all_tool_collections(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
-    # No nested collections to recurse into - the catalog is flat, so this
-    # answers exactly like EnumToolCollection for the one root that exists.
+async def _enum_all_tool_collections(_ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
+    """Everything below a collection, as paths relative to it."""
     node_name = _require_node_name(args, CommandName.ENUM_ALL_TOOL_COLLECTIONS)
-    _require_root_collection(node_name, CommandName.ENUM_ALL_TOOL_COLLECTIONS)
-    return await _enum_tool_collection(ctx, args)
+    below = descendants_of(collection_root(), node_name)
+    if below is None:
+        raise _no_collection(CommandName.ENUM_ALL_TOOL_COLLECTIONS)
+    return [builders.property_entry(name, kind) for name, kind in below]
 
 
-async def _open_tool_collection(_ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
+async def _open_tool_collection(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
+    """Open a collection: tools are then named by its entries (Figure 56)."""
     node_name = _require_node_name(args, CommandName.OPEN_TOOL_COLLECTION)
-    _require_root_collection(node_name, CommandName.OPEN_TOOL_COLLECTION)
-    # Every catalog tool is already referenced directly by its bare name -
-    # the catalog only ever had the one (root) collection to "open".
+    if find_node(collection_root(), node_name) is None:
+        raise _no_collection(CommandName.OPEN_TOOL_COLLECTION)
+    ctx.state.tool.open_collection = SEPARATOR.join(split_path(node_name)) or None
     return None
 
 
@@ -117,10 +135,15 @@ def activate_tool(ctx: Ctx, name: str) -> None:
 
 
 async def _change_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
-    name = _require_tool_name(args, CommandName.CHANGE_TOOL)
+    entry = _require_tool_name(args, CommandName.CHANGE_TOOL)
+    name = resolve_tool_name(ctx, entry) or entry
     if name not in TOOL_CATALOG:
         raise ServerError(
             ErrorSeverity.ERROR, ErrorCode.TOOL_NOT_FOUND, CommandName.CHANGE_TOOL, "Tool not found"
+        )
+    if ctx.tool_handler is not None:
+        await ctx.tool_handler.change_tool(
+            ctx.state.tool.active_name, name, ctx.state.cart_cmm.position, ctx.cancel
         )
     activate_tool(ctx, name)
     # 6.7.1: ChangeTool() implicitly executes DisableUser().
@@ -132,7 +155,8 @@ async def _change_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
 
 
 async def _find_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
-    name = _require_tool_name(args, CommandName.FIND_TOOL)
+    entry = _require_tool_name(args, CommandName.FIND_TOOL)
+    name = resolve_tool_name(ctx, entry) or entry
     if name not in TOOL_CATALOG:
         ctx.state.tool.found_name = UNDEF_TOOL
         raise ServerError(
@@ -148,7 +172,8 @@ async def _found_tool(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
 
 
 async def _set_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
-    name = _require_tool_name(args, CommandName.SET_TOOL)
+    entry = _require_tool_name(args, CommandName.SET_TOOL)
+    name = resolve_tool_name(ctx, entry) or entry
     if name not in TOOL_CATALOG:
         raise ServerError(
             ErrorSeverity.ERROR, ErrorCode.TOOL_NOT_FOUND, CommandName.SET_TOOL, "Tool not found"
@@ -158,7 +183,8 @@ async def _set_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
 
 
 async def _get_change_tool_action(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
-    name = _require_tool_name(args, CommandName.GET_CHANGE_TOOL_ACTION)
+    entry = _require_tool_name(args, CommandName.GET_CHANGE_TOOL_ACTION)
+    name = resolve_tool_name(ctx, entry) or entry
     if name not in TOOL_CATALOG:
         raise ServerError(
             ErrorSeverity.ERROR,
