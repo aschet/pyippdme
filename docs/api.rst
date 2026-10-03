@@ -11,6 +11,9 @@ API Reference
 .. automodule:: pyippdme.client.model
    :members:
 
+.. automodule:: pyippdme.client.call
+   :members:
+
 .. automodule:: pyippdme.client
    :members:
 

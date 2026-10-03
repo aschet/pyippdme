@@ -11,6 +11,7 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator
 
+from pyippdme.client.call import record_transaction
 from pyippdme.client.transaction import Transaction
 from pyippdme.exceptions import IppDmeConnectionError, IppDmeError, IppDmeProtocolError
 from pyippdme.protocol.ast import (
@@ -122,6 +123,7 @@ class IppDmeClient:
         chosen_tag = tag if tag is not None else self._allocate_command_tag()
         txn = Transaction(chosen_tag)
         self._pending[chosen_tag.to_wire()] = txn
+        record_transaction(txn)
         command = Command(chosen_tag, Method(name, args))
         if self._on_line_sent is not None:
             call_line_hook(self._on_line_sent, command.to_wire())

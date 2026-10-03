@@ -107,6 +107,26 @@ asyncio.run(main())
 Anything `IppDmeMachine` doesn't wrap is still reachable via
 `machine.client.call(...)` directly.
 
+Each method sends its command as soon as it is called and returns a handle.
+Awaiting the handle waits until the command is done and gives its typed result.
+You can also check the acknowledgement first:
+
+```python
+call = machine.cart_cmm.pt_meas(x=1, y=2, z=3)  # command sent
+await call.acknowledged()                       # the server received it
+position = await call                           # dict[str, float]
+
+scan = machine.scanning.scan_on_line((0, 0, 0), (10, 0, 0), (0, 0, 1), step_width=2.0)
+await scan.acknowledged()
+async for point in scan:                        # points as they arrive
+    print(point)
+```
+
+An Ack only means the server received the command. A command that then fails
+is reported after the Ack and raises `IppDmeServerError` when you await the
+handle, not from `acknowledged()`. For the raw responses, use
+`machine.client.send(...)`, which returns a `Transaction`.
+
 ## In-process connections
 
 Everything that opens or accepts a connection (`IppDmeClient`, `IppDmeMachine`,

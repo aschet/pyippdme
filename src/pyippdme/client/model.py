@@ -33,6 +33,7 @@ from dataclasses import dataclass
 
 from pyippdme.client import IppDmeClient, LineHook, builders
 from pyippdme.client.builders import CurvePoint as CurvePoint
+from pyippdme.client.call import call_handle, stream_handle, unrecorded
 from pyippdme.protocol.ast import (
     Argument,
     BasicName,
@@ -147,14 +148,17 @@ class Server:
     def __init__(self, client: IppDmeClient) -> None:
         self._client = client
 
+    @call_handle
     async def get_error_info(self, error_number: int) -> str:
         data = await self._client.call(CommandName.GET_ERROR_INFO, Number.of(error_number))
         return _string_value(_only(data))
 
+    @call_handle
     async def get_err_status(self) -> bool:
         (value,) = _numeric(_only(await self._client.call(CommandName.GET_ERR_STATUS_E)))
         return value != 0.0
 
+    @call_handle
     async def enum_prop(self, reference: str) -> tuple[tuple[str, str], ...]:
         """List the direct children of ``reference`` (e.g. ``"Tool.GoToPar"``, ``"Part"``).
 
@@ -167,6 +171,7 @@ class Server:
         data = await self._client.call(CommandName.ENUM_PROP, *builders.enum_prop(reference))
         return _property_pairs(data)
 
+    @call_handle
     async def enum_all_prop(self, reference: str) -> tuple[tuple[str, str], ...]:
         """Like :meth:`enum_prop`, but recursing into every ``"Property"``-typed child."""
         data = await self._client.call(
@@ -181,6 +186,7 @@ class Dme:
     def __init__(self, client: IppDmeClient) -> None:
         self._client = client
 
+    @call_handle
     async def get_dme_version(self) -> str:
         payload = _only(await self._client.call(CommandName.GET_DME_VERSION))
         (value,) = _items(payload)
@@ -189,19 +195,24 @@ class Dme:
             raise TypeError(f"Expected a string DMEVersion, got {type(version).__name__}")
         return version.value
 
+    @call_handle
     async def get_supported_commands(self) -> tuple[str, ...]:
         return _string_values(await self._client.call(CommandName.GET_SUPPORTED_COMMANDS))
 
+    @call_handle
     async def get_supported_arguments(self, command_name: str) -> dict[str, str]:
         data = await self._client.call(CommandName.GET_SUPPORTED_ARGUMENTS, String(command_name))
         return dict(_property_pairs(data))
 
+    @call_handle
     async def get_machine_class(self) -> str:
         return _string_value(_only(await self._client.call(CommandName.GET_MACHINE_CLASS)))
 
+    @call_handle
     async def home(self) -> None:
         await self._client.call(CommandName.HOME)
 
+    @call_handle
     async def is_homed(self) -> bool:
         payload = _only(await self._client.call(CommandName.IS_HOMED))
         return _named_numbers(payload)[CommandName.IS_HOMED] != 0.0
@@ -247,48 +258,58 @@ class CartCmm:
     def __init__(self, client: IppDmeClient) -> None:
         self._client = client
 
+    @call_handle
     async def set_coord_system(self, csy: str) -> None:
         await self._client.call(CommandName.SET_COORD_SYSTEM, BasicName(csy))
 
+    @call_handle
     async def get_coord_system(self) -> str:
         return _name_value(_only(await self._client.call(CommandName.GET_COORD_SYSTEM)))
 
+    @call_handle
     async def get(self, *axes: str) -> dict[str, float]:
         """Query one or more axes, e.g. ``await cart_cmm.get("X", "Y", "R")``."""
         payload = _only(await self._client.call(CommandName.GET, *builders.get(*axes)))
         return _named_numbers(payload)
 
+    @call_handle
     async def get_position(self) -> Vec3:
         values = await self.get("X", "Y", "Z")
         return (values["X"], values["Y"], values["Z"])
 
+    @call_handle
     async def go_to(
         self, x: float | None = None, y: float | None = None, z: float | None = None
     ) -> None:
         await self._client.call(CommandName.GO_TO, *builders.go_to(x, y, z))
 
+    @call_handle
     async def step(
         self, x: float | None = None, y: float | None = None, z: float | None = None
     ) -> None:
         """Perform a relative move (6.8.1): add to the current position, not replace it."""
         await self._client.call(CommandName.STEP, *builders.step(x, y, z))
 
+    @call_handle
     async def go_to_on_circle(self, center: Vec3, ijk: Vec3, target: Vec3) -> None:
         await self._client.call(
             CommandName.GO_TO_ON_CIRCLE, *builders.go_to_on_circle(center, ijk, target)
         )
 
+    @call_handle
     async def go_to_on_spiral(self, center: Vec3, ijk: Vec3, target: Vec3) -> None:
         await self._client.call(
             CommandName.GO_TO_ON_SPIRAL, *builders.go_to_on_spiral(center, ijk, target)
         )
 
+    @call_handle
     async def pt_meas(
         self, x: float | None = None, y: float | None = None, z: float | None = None
     ) -> dict[str, float]:
         payload = _only(await self._client.call(CommandName.PT_MEAS, *builders.pt_meas(x, y, z)))
         return _named_numbers(payload)
 
+    @call_handle
     async def set_csy_transformation(self, csy: str, transform: CoordinateTransform) -> None:
         await self._client.call(
             CommandName.SET_CSY_TRANSFORMATION,
@@ -296,10 +317,12 @@ class CartCmm:
             *builders.set_csy_transformation(transform),
         )
 
+    @call_handle
     async def get_csy_transformation(self, csy: str) -> CoordinateTransform:
         payload = _only(await self._client.call(CommandName.GET_CSY_TRANSFORMATION, BasicName(csy)))
         return _transform_from_items(payload)
 
+    @call_handle
     async def save_named_csy_transformation(
         self, name: str, transform: CoordinateTransform
     ) -> None:
@@ -309,33 +332,41 @@ class CartCmm:
             *builders.set_csy_transformation(transform),
         )
 
+    @call_handle
     async def get_named_csy_transformation(self, name: str) -> CoordinateTransform:
         payload = _only(
             await self._client.call(CommandName.GET_NAMED_CSY_TRANSFORMATION, String(name))
         )
         return _transform_from_items(payload)
 
+    @call_handle
     async def save_active_coord_system(self, name: str) -> None:
         await self._client.call(CommandName.SAVE_ACTIVE_COORD_SYSTEM, String(name))
 
+    @call_handle
     async def load_coord_system(self, name: str) -> None:
         await self._client.call(CommandName.LOAD_COORD_SYSTEM, String(name))
 
+    @call_handle
     async def delete_coord_system(self, name: str) -> None:
         await self._client.call(CommandName.DELETE_COORD_SYSTEM, String(name))
 
+    @call_handle
     async def enum_coord_systems(self) -> tuple[str, ...]:
         return _string_values(await self._client.call(CommandName.ENUM_COORD_SYSTEMS))
 
+    @call_handle
     async def get_temperature_sensors(self) -> tuple[TemperatureSensorInfo, ...]:
         data = await self._client.call(CommandName.GET_TEMPERATURE_SENSORS)
         return tuple(_temperature_sensor_info(payload) for payload in data)
 
+    @call_handle
     async def read_temperature_sensor(self, name: str) -> float:
         payload = _only(await self._client.call(CommandName.READ_TEMPERATURE_SENSOR, String(name)))
         (value,) = _numeric(payload)
         return value
 
+    @call_handle
     async def read_all_temperatures(self) -> dict[str, float]:
         """Every currently-connected sensor's reading; a disconnected sensor is omitted."""
         data = await self._client.call(CommandName.READ_ALL_TEMPERATURES)
@@ -366,13 +397,16 @@ class Tool:
     def __init__(self, client: IppDmeClient) -> None:
         self._client = client
 
+    @call_handle
     async def get_name(self) -> str:
         return _name_value(_only(await self._client.call(CommandName.TOOL)))
 
+    @call_handle
     async def is_alignable(self) -> bool:
         (value,) = _numeric(_only(await self._client.call(CommandName.IS_ALIGNABLE)))
         return value != 0.0
 
+    @call_handle
     async def get_id(self) -> ToolId:
         payload = _only(
             await self._client.call(CommandName.GET_PROP, *builders.get_prop("Tool.Id"))
@@ -382,6 +416,7 @@ class Tool:
             raise TypeError("Tool.Id() did not return an XML payload")
         return tool_id_from_xml(value.xml.raw)
 
+    @call_handle
     async def get_parameter(self, block: str, name: str) -> ToolParameterValue:
         """E.g. ``await tool.get_parameter("PtMeasPar", "Retract")``."""
         path = f"Tool.{block}.{name}"
@@ -399,6 +434,7 @@ class Tool:
             values[f"{path}.Act"],
         )
 
+    @call_handle
     async def set_parameter(self, block: str, name: str, value: float) -> None:
         await self._client.call(
             CommandName.SET_PROP, *builders.set_prop(f"Tool.{block}.{name}", value)
@@ -411,6 +447,7 @@ class Scanning:
     def __init__(self, client: IppDmeClient) -> None:
         self._client = client
 
+    @stream_handle
     async def scan_on_line(
         self, start: Vec3, end: Vec3, direction: Vec3, step_width: float
     ) -> AsyncIterator[Vec3]:
@@ -423,12 +460,16 @@ class Scanning:
         previously-set ``OnScanReport`` the caller might have configured
         differently.
         """
-        await self._client.call(CommandName.ON_SCAN_REPORT, *builders.on_scan_report("X", "Y", "Z"))
+        with unrecorded():
+            await self._client.call(
+                CommandName.ON_SCAN_REPORT, *builders.on_scan_report("X", "Y", "Z")
+            )
         args = tuple(Number.of(v) for v in (*start, *end, *direction, step_width))
         async for payload in self._client.call_streaming(CommandName.SCAN_ON_LINE, *args):
             x, y, z = _numeric(payload)
             yield (x, y, z)
 
+    @stream_handle
     async def scan_on_curve(
         self, points: Sequence[CurvePoint], *, closed: bool = False
     ) -> AsyncIterator[Vec3]:
@@ -438,7 +479,10 @@ class Scanning:
         the confirmed wire encoding and this implementation's scope (the
         mandatory position/orientation/tag ``Format`` columns only).
         """
-        await self._client.call(CommandName.ON_SCAN_REPORT, *builders.on_scan_report("X", "Y", "Z"))
+        with unrecorded():
+            await self._client.call(
+                CommandName.ON_SCAN_REPORT, *builders.on_scan_report("X", "Y", "Z")
+            )
         args = builders.scan_on_curve(points, closed=closed)
         async for payload in self._client.call_streaming(CommandName.SCAN_ON_CURVE, *args):
             x, y, z = _numeric(payload)
@@ -456,12 +500,15 @@ class FormTester:
         (achieved,) = _numeric(_only(data))
         return achieved != 0.0
 
+    @call_handle
     async def center_part(self, x: float, y: float, z: float, limit: float) -> bool:
         return await self._status(CommandName.CENTER_PART, x, y, z, limit)
 
+    @call_handle
     async def tilt_part(self, i: float, j: float, k: float, limit: float) -> bool:
         return await self._status(CommandName.TILT_PART, i, j, k, limit)
 
+    @call_handle
     async def tilt_center_part(
         self,
         x1: float,
@@ -474,9 +521,11 @@ class FormTester:
     ) -> bool:
         return await self._status(CommandName.TILT_CENTER_PART, x1, y1, z1, x2, y2, z2, limit)
 
+    @call_handle
     async def lock_axis(self, *axes: str) -> None:
         await self._client.call(CommandName.LOCK_AXIS, *builders.lock_axis(*axes))
 
+    @call_handle
     async def lock_position(self, *positions: str) -> None:
         await self._client.call(CommandName.LOCK_POSITION, *builders.lock_position(*positions))
 
@@ -487,25 +536,31 @@ class Mover:
     def __init__(self, client: IppDmeClient) -> None:
         self._client = client
 
+    @call_handle
     async def enable_user(self) -> None:
         await self._client.call(CommandName.ENABLE_USER)
 
+    @call_handle
     async def disable_user(self) -> None:
         await self._client.call(CommandName.DISABLE_USER)
 
+    @call_handle
     async def is_user_enabled(self) -> bool:
         payload = _only(await self._client.call(CommandName.IS_USER_ENABLED))
         return _named_numbers(payload)[CommandName.IS_USER_ENABLED] != 0.0
 
+    @call_handle
     async def enumerate_mover_axes(self) -> tuple[str, ...]:
         payload = _only(await self._client.call(CommandName.ENUMERATE_MOVER_AXES))
         return tuple(nv.name for nv in _items(payload))
 
+    @call_handle
     async def set_scale_temperatures(self, **temperatures: float) -> None:
         await self._client.call(
             CommandName.SET_SCALE_TEMPERATURES, *builders.set_scale_temperatures(**temperatures)
         )
 
+    @call_handle
     async def get_scale_temperatures(self, *axes: str) -> dict[str, float]:
         payload = _only(
             await self._client.call(
@@ -525,22 +580,28 @@ class ToolChanger:
     def __init__(self, client: IppDmeClient) -> None:
         self._client = client
 
+    @call_handle
     async def enum_tools(self) -> tuple[str, ...]:
         data = await self._client.call(CommandName.ENUM_TOOLS)
         return tuple(_name_value(item) for item in data)
 
+    @call_handle
     async def change_tool(self, tool_name: str) -> None:
         await self._client.call(CommandName.CHANGE_TOOL, String(tool_name))
 
+    @call_handle
     async def find_tool(self, tool_name: str) -> None:
         await self._client.call(CommandName.FIND_TOOL, String(tool_name))
 
+    @call_handle
     async def found_tool(self) -> str:
         return _name_value(_only(await self._client.call(CommandName.FOUND_TOOL)))
 
+    @call_handle
     async def set_tool(self, tool_name: str) -> None:
         await self._client.call(CommandName.SET_TOOL, String(tool_name))
 
+    @call_handle
     async def get_change_tool_action(self, tool_name: str) -> tuple[str, Vec3]:
         """Return ``(action, (dx, dy, dz))``.
 
@@ -578,33 +639,43 @@ class Part:
     async def _set_float(self, name: str, value: float) -> None:
         await self._client.call(CommandName.SET_PROP, *builders.set_prop(name, value))
 
+    @call_handle
     async def get_temperature(self) -> float:
         return await self._get_float("Part.Temperature")
 
+    @call_handle
     async def set_temperature(self, value: float) -> None:
         await self._set_float("Part.Temperature", value)
 
+    @call_handle
     async def get_xpan_coefficient(self) -> float:
         return await self._get_float("Part.XpanCoefficient")
 
+    @call_handle
     async def set_xpan_coefficient(self, value: float) -> None:
         await self._set_float("Part.XpanCoefficient", value)
 
+    @call_handle
     async def get_approach(self) -> float:
         return await self._get_float("Part.Approach")
 
+    @call_handle
     async def set_approach(self, value: float) -> None:
         await self._set_float("Part.Approach", value)
 
+    @call_handle
     async def get_search(self) -> float:
         return await self._get_float("Part.Search")
 
+    @call_handle
     async def set_search(self, value: float) -> None:
         await self._set_float("Part.Search", value)
 
+    @call_handle
     async def get_retract(self) -> float:
         return await self._get_float("Part.Retract")
 
+    @call_handle
     async def set_retract(self, value: float) -> None:
         await self._set_float("Part.Retract", value)
 
@@ -615,11 +686,13 @@ class RotaryTable:
     def __init__(self, client: IppDmeClient) -> None:
         self._client = client
 
+    @call_handle
     async def enable_rotary_table_var_csy(self, enabled: bool) -> None:
         await self._client.call(
             CommandName.ENABLE_ROTARY_TABLE_VAR_CSY, Number.of(1 if enabled else 0)
         )
 
+    @call_handle
     async def align_part(
         self, part_vector: Vec3, machine_vector: Vec3, alpha: float
     ) -> tuple[Vec3, Vec3]:
@@ -634,12 +707,14 @@ class RawDataHandling:
     def __init__(self, client: IppDmeClient) -> None:
         self._client = client
 
+    @call_handle
     async def get_adv_data_struct(self) -> AdvDataStruct:
         payload = _only(await self._client.call(CommandName.ADV_DATA_STRUCT))
         if not isinstance(payload, Xml):
             raise TypeError(f"Expected an Xml response, got {type(payload).__name__}")
         return adv_data_struct_from_xml(payload.raw)
 
+    @call_handle
     async def data_acquire(
         self,
         acq_name: str,
@@ -677,20 +752,25 @@ class RawDataHandling:
             *numbers,
         )
 
+    @call_handle
     async def get_raw_data_file(self, acq_name: str) -> str:
         """Return the ``file://`` URL the acquisition's data was written to."""
         payload = _only(await self._client.call(CommandName.GET_RAW_DATA_FILE, String(acq_name)))
         return _named_strings(payload)["FileURL"]
 
+    @call_handle
     async def del_raw_data_file(self, acq_name: str) -> None:
         await self._client.call(CommandName.DEL_RAW_DATA_FILE, String(acq_name))
 
+    @call_handle
     async def delete_acquisition(self, acq_name: str) -> None:
         await self._client.call(CommandName.DELETE_ACQUISITION, String(acq_name))
 
+    @call_handle
     async def delete_all_acquisitions(self) -> None:
         await self._client.call(CommandName.DELETE_ALL_ACQUISITIONS)
 
+    @call_handle
     async def get_raw_data_sha_mem(self, acq_name: str) -> tuple[str, int, int]:
         """Return ``(shared_memory_name, offset, size_bytes)``."""
         payload = _only(await self._client.call(CommandName.GET_RAW_DATA_SHA_MEM, String(acq_name)))
@@ -702,6 +782,7 @@ class RawDataHandling:
             raise TypeError("Expected numeric DataSegment/Size")
         return name.value, int(offset.value), int(size.value)
 
+    @call_handle
     async def release_sha_mem(self, acq_name: str) -> None:
         await self._client.call(CommandName.RELEASE_SHA_MEM, String(acq_name))
 
