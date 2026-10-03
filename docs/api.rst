@@ -97,3 +97,6 @@ API Reference
 
 .. automodule:: pyippdme.protocol.errors
    :members:
+
+.. automodule:: pyippdme.spy
+   :members:

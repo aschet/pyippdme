@@ -137,6 +137,29 @@ A `MemoryNetwork` ignores host names and matches connections by port only. The
 network is a small protocol (`open_connection` and `start_server`, mirroring
 asyncio), so other implementations can be plugged in the same way.
 
+## Spy
+
+`Spy` is a proxy between a client and a server that reports every line it
+relays (`on_message`). It only observes unless you give it an `intercept`
+function, which is awaited for each received line and returns what to send on
+instead: the same bytes to forward it unchanged, other bytes to alter it,
+`None` to drop it, or a list of lines to replace it with several. Lines are raw
+bytes ending in `\r\n`. `ippdme spy` never filters anything.
+
+```python
+from pyippdme.spy import Spy, SpyDirection, SpyMessage
+
+async def intercept(message: SpyMessage) -> bytes | None:
+    if message.direction is SpyDirection.TO_SERVER and b"GoTo" in message.line:
+        return None  # drop every GoTo
+    return message.line
+
+spy = Spy("192.168.1.50", 1294, intercept=intercept)
+```
+
+A dropped or altered command can leave the client waiting for a response the
+server never sends. The spy does not invent one.
+
 ## Static command catalog
 
 Building your own tooling on top of this package - a REPL/TUI completion

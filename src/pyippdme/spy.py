@@ -9,19 +9,20 @@ connection, opens a new outbound connection to the real server and relays
 bytes in both directions unchanged - it never decodes a line through
 :mod:`pyippdme.protocol.parser`/re-encodes it, deliberately, so nothing here
 can normalize or subtly alter what either side actually sent (a
-byte-for-byte relay is the whole point of a spy; round-tripping through
+byte-for-byte relay is what a spy is for; round-tripping through
 the AST would only be able to approximate that). Line boundaries (``\r\n``,
 per 5.1) are still respected, since that is what lets each
-forwarded message be reported to :attr:`on_message` as a discrete event
+message be reported to :attr:`on_message` as a discrete event
 rather than an arbitrary chunk of bytes.
 
 :attr:`on_message`/:attr:`on_connect`/:attr:`on_disconnect` are
 observe-only: they are told what was relayed, but cannot change, delay, or
-block it - forwarding unchanged is a hard invariant of this class, not
-something a hook can opt out of. ``ippdme spy`` (:mod:`pyippdme.cli.spy`) is a
+block it. To filter, alter, delay or multiply messages, pass an ``intercept``
+function (:data:`Interceptor`); without one, every line is forwarded
+unchanged. ``ippdme spy`` (:mod:`pyippdme.cli.spy`) is a
 thin console-logging consumer of this same class, not a separate
 implementation - embedding a spy in your own tooling (recording a session,
-feeding traffic to an analyzer, ...) uses exactly this API.
+feeding traffic to an analyzer, rewriting commands, ...) uses exactly this API.
 """
 
 from __future__ import annotations
@@ -29,8 +30,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 
@@ -53,14 +54,36 @@ class SpyDirection(StrEnum):
     TO_CLIENT = "to_client"
 
 
+class SpyOutcome(StrEnum):
+    """What a :class:`Spy` did with a received line."""
+
+    FORWARDED = "forwarded"
+    ALTERED = "altered"
+    DROPPED = "dropped"
+
+
 @dataclass(frozen=True, slots=True)
 class SpyMessage:
-    r"""One line relayed by :class:`Spy`, exactly as forwarded (including its trailing ``\r\n``)."""
+    r"""One line received by :class:`Spy` (including its trailing ``\r\n``).
+
+    ``line`` is the line as it arrived. ``forwarded`` is what was sent on in
+    its place: ``None`` if it was forwarded unchanged, otherwise the lines an
+    ``intercept`` function returned (empty if the message was dropped).
+    """
 
     connection_id: int
     direction: SpyDirection
     timestamp: datetime
     line: bytes
+    forwarded: tuple[bytes, ...] | None = None
+
+    @property
+    def outcome(self) -> SpyOutcome:
+        if self.forwarded is None:
+            return SpyOutcome.FORWARDED
+        if not self.forwarded:
+            return SpyOutcome.DROPPED
+        return SpyOutcome.ALTERED
 
 
 #: A hook is a plain, synchronous callable - matching this project's existing
@@ -73,6 +96,17 @@ class SpyMessage:
 #: not take down the relay itself.
 MessageHook = Callable[[SpyMessage], None]
 ConnectionHook = Callable[[int, str], None]
+
+#: Decides what to forward in place of a received line. It is awaited before
+#: anything is sent on, so it may also delay a message. Return the same bytes
+#: to forward unchanged, other bytes to alter the message, ``None``, empty bytes
+#: or an empty sequence to drop it, or several lines to replace it with more than
+#: one. Returned lines should end in ``\r\n`` (5.1). Lines of one direction
+#: are processed one at a time, in order. Dropping or altering a command
+#: can leave the client waiting for a response the server never sends; the
+#: spy does not invent one. An interceptor that raises is logged and the
+#: connection is closed.
+Interceptor = Callable[[SpyMessage], Awaitable[bytes | Sequence[bytes] | None]]
 
 
 def _call_hook(hook: Callable[..., None] | None, *args: object) -> None:
@@ -105,11 +139,13 @@ class Spy:
         port: int,
         *,
         network: Network = TCP_NETWORK,
+        intercept: Interceptor | None = None,
         on_message: MessageHook | None = None,
         on_connect: ConnectionHook | None = None,
         on_disconnect: ConnectionHook | None = None,
     ) -> None:
         self._network = network
+        self._intercept = intercept
         self._host = host
         self._port = port
         self._on_message = on_message
@@ -206,13 +242,33 @@ class Spy:
                         connection_id,
                     )
                     return
-                writer.write(line)
+                message = SpyMessage(connection_id, direction, datetime.now(), line)
+                if self._intercept is not None:
+                    try:
+                        result = await self._intercept(message)
+                    except Exception:
+                        logger.exception(
+                            "Spy connection %d: an interceptor raised, closing the connection",
+                            connection_id,
+                        )
+                        return
+                    lines = _as_lines(result)
+                    if lines != (line,):
+                        message = replace(message, forwarded=lines)
+                for out in message.forwarded if message.forwarded is not None else (line,):
+                    writer.write(out)
                 await writer.drain()
-                _call_hook(
-                    self._on_message, SpyMessage(connection_id, direction, datetime.now(), line)
-                )
+                _call_hook(self._on_message, message)
         except (ConnectionError, OSError):
             return
+
+
+def _as_lines(result: bytes | Sequence[bytes] | None) -> tuple[bytes, ...]:
+    if result is None:
+        return ()
+    if isinstance(result, bytes):
+        return (result,) if result else ()
+    return tuple(line for line in result if line)
 
 
 async def _close(writer: StreamWriterLike) -> None:
