@@ -2,68 +2,66 @@
 #
 # SPDX-License-Identifier: MPL-2.0
 
-"""The simulator window: 3D view of the twin plus the controls to set it up and run it."""
+"""The simulator window: the machine in 3D, and the panels to set it up, run it and teach it.
+
+The window only assembles panels (:mod:`pyippdme.gui.scene_panel`, ``machine_panel``,
+``twin_panels``, ``teach_panel``, ``library_panel``) around the 3D view, wires the toolbar and
+menus, and shows the machine state in the :class:`~pyippdme.gui.status_strip.StatusStrip`. The
+simulation itself is :class:`~pyippdme.twin.DigitalTwin`; a client connects to its server over TCP.
+"""
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDockWidget,
-    QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
-    QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QSlider,
     QSpinBox,
+    QTabWidget,
+    QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from pyippdme.gui.icons import app_icon, load_icon
+from pyippdme.gui.library_panel import ToolCreator
+from pyippdme.gui.machine_panel import MachinePanel
+from pyippdme.gui.scene_panel import ScenePanel
+from pyippdme.gui.status_strip import StatusStrip
+from pyippdme.gui.teach_panel import TeachPanel
 from pyippdme.gui.twin_panels import CheckPanel, SafetyPanel, ToolPanel
-from pyippdme.gui.viewport import Viewport
+from pyippdme.gui.viewport import FOLLOW_VIEWS, VIEW_PRESETS, Viewport
 from pyippdme.protocol.transport import DEFAULT_PORT
 from pyippdme.server.host import ServerHost
-from pyippdme.twin import DigitalTwin, MachineModel, TwinEvent, demo_sample, geometry
-from pyippdme.twin.cad import SUPPORTED_SUFFIXES, CadError
-from pyippdme.twin.objects import SceneObject
-from pyippdme.twin.spec import PRESETS
+from pyippdme.twin import DigitalTwin, TwinEvent
 
-_TIME_SCALES = (("Instant", 0.0), ("Real time", 1.0), ("2x", 2.0), ("5x", 5.0), ("20x", 20.0))
-_CAD_FILTER = "CAD files (" + " ".join(f"*{s}" for s in SUPPORTED_SUFFIXES) + ");;All files (*)"
 _LOG_LIMIT = 3000
+_VIEWS = (
+    ("isometric", "view-iso", "Isometric", "1"),
+    ("top", "view-top", "Top", "2"),
+    ("front", "view-front", "Front", "3"),
+    ("right", "view-side", "Side", "4"),
+    ("follow", "view-follow", "Follow tool", "5"),
+    ("probe", "view-probe", "Probe camera", "6"),
+    ("table", "view-table", "Table camera", "7"),
+)
 
 
 class _Bridge(QObject):
     """Hands twin events from the server thread to the GUI thread."""
 
     event = Signal(object)  # type: ignore[assignment]
-
-
-def _spin(
-    lo: float, hi: float, value: float = 0.0, step: float = 1.0, decimals: int = 3
-) -> QDoubleSpinBox:
-    box = QDoubleSpinBox()
-    box.setRange(lo, hi)
-    box.setDecimals(decimals)
-    box.setSingleStep(step)
-    box.setValue(value)
-    box.setKeyboardTracking(False)
-    return box
 
 
 class MainWindow(QMainWindow):
@@ -77,230 +75,299 @@ class MainWindow(QMainWindow):
         self._bridge.event.connect(self._on_event)
         self.twin.add_listener(self._bridge.event.emit)
         self.setWindowTitle("pyippdme virtual CMM")
-        self.resize(1500, 900)
+        self.setWindowIcon(app_icon())
+        self.resize(1560, 940)
 
         self.viewport = Viewport(self.twin)
-        self.setCentralWidget(self.viewport)
-        self._selected: SceneObject | None = None
-        self._updating_pose = False
+        self.strip = StatusStrip()
+        center = QWidget()
+        column = QVBoxLayout(center)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        column.addWidget(self.strip)
+        column.addWidget(self.viewport, 1)
+        self.setCentralWidget(center)
 
-        self._build_server_dock()
-        self._build_machine_dock()
-        self._build_scene_dock()
-        self._build_jog_dock()
-        self._build_log_dock()
-        self._build_panels()
+        self.scene_panel = ScenePanel(self.twin)
+        self.machine_panel = MachinePanel(self.twin)
+        self.tool_panel = ToolPanel(self.twin)
+        self.tool_creator = ToolCreator(self.twin)
+        self.check_panel = CheckPanel(self.twin, lambda: self.host.port)
+        self.safety_panel = SafetyPanel(self.twin)
+        self.teach_panel = TeachPanel(self.twin, self.host.submit, lambda: self.host.port)
+        self._build_docks()
+        self._build_actions()
+        self._build_toolbars()
         self._build_menus()
-        self.statusBar().showMessage("Server stopped")
+        self.machine_panel.on_machine_changed += [
+            self.viewport.fit,
+            self.tool_panel.refresh,
+            self.teach_panel.refresh_tools,
+        ]
+        self.tool_creator.tool_created.connect(lambda _: self.tool_panel.refresh())
+        self.scene_panel.changed.connect(self.viewport.update)
 
+        self._painted_key: object = None
         self._timer = QTimer(self)
         self._timer.setInterval(33)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
-        self._refresh_scene_list()
-        self._refresh_machine_info()
+        self.strip.set_server(False)
+        self.statusBar().showMessage("Start the server (F5) so that a client can connect.")
 
-    # -- docks -------------------------------------------------------------------------
+    # -- compatibility names ------------------------------------------------------------------
+
+    @property
+    def scene_list(self):  # type: ignore[no-untyped-def]
+        return self.scene_panel.scene_list
+
+    @property
+    def pose_boxes(self):  # type: ignore[no-untyped-def]
+        return self.scene_panel.pose_boxes
+
+    @property
+    def machine_info(self):  # type: ignore[no-untyped-def]
+        return self.machine_panel.info
+
+    def add_demo_sample(self) -> None:
+        self.scene_panel.add_demo_sample()
+
+    def load_sample(self) -> None:
+        self.scene_panel.load_sample()
+
+    def remove_selected(self) -> None:
+        self.scene_panel.remove_selected()
+
+    def _refresh_scene_list(self) -> None:
+        self.scene_panel.refresh()
+
+    def _refresh_machine_info(self) -> None:
+        self.machine_panel.refresh()
+
+    # -- layout -------------------------------------------------------------------------------
 
     def _dock(self, title: str, widget: QWidget, area: Qt.DockWidgetArea) -> QDockWidget:
         dock = QDockWidget(title, self)
         dock.setWidget(widget)
         dock.setObjectName(title)
+        dock.setWindowIcon(load_icon("settings"))
         self.addDockWidget(area, dock)
         return dock
 
-    def _build_server_dock(self) -> None:
-        w = QWidget()
-        form = QFormLayout(w)
-        self.host_edit = QLineEdit("127.0.0.1")
-        self.port_spin = QSpinBox()
-        self.port_spin.setRange(0, 65535)
-        self.port_spin.setValue(DEFAULT_PORT)
-        self.start_button = QPushButton("Start server")
-        self.start_button.clicked.connect(self.toggle_server)
-        self.client_label = QLabel("no client")
-        self.class_label = QLabel("")
-        self.class_label.setWordWrap(True)
-        form.addRow("Host", self.host_edit)
-        form.addRow("Port", self.port_spin)
-        form.addRow(self.start_button)
-        form.addRow("Client", self.client_label)
-        form.addRow("Machine class", self.class_label)
-        self._dock("Server", w, Qt.DockWidgetArea.LeftDockWidgetArea)
+    def _build_docks(self) -> None:
+        self._dock("Scene", self.scene_panel, Qt.DockWidgetArea.LeftDockWidgetArea)
 
-    def _build_machine_dock(self) -> None:
-        w = QWidget()
-        layout = QVBoxLayout(w)
-        form = QFormLayout()
-        self.preset_combo = QComboBox()
-        self.preset_combo.addItems(list(PRESETS))
-        self.preset_combo.currentTextChanged.connect(self._preset_changed)
-        self.rotary_check = QCheckBox("Rotary table")
-        self.rotary_check.toggled.connect(
-            lambda _: self._preset_changed(self.preset_combo.currentText())
-        )
-        self.time_combo = QComboBox()
-        for label, _ in _TIME_SCALES:
-            self.time_combo.addItem(label)
-        self.time_combo.setCurrentIndex(1)
-        self.time_combo.currentIndexChanged.connect(
-            lambda i: setattr(self.twin, "time_scale", _TIME_SCALES[i][1])
-        )
-        self.override = QSlider(Qt.Orientation.Horizontal)
-        self.override.setRange(1, 100)
-        self.override.setValue(100)
-        self.override.valueChanged.connect(lambda v: setattr(self.twin, "speed_override", v / 100))
-        self.noise_check = QCheckBox("Measuring noise (MPE)")
-        self.noise_check.setChecked(True)
-        self.noise_check.toggled.connect(lambda on: setattr(self.twin, "noise_enabled", on))
-        self.temperature = _spin(0, 60, 20.0, 0.5, 1)
-        self.temperature.valueChanged.connect(lambda v: setattr(self.twin, "temperature", v))
-        form.addRow("Preset", self.preset_combo)
-        form.addRow(self.rotary_check)
-        form.addRow("Motion", self.time_combo)
-        form.addRow("Speed override", self.override)
-        form.addRow(self.noise_check)
-        form.addRow("Part temperature °C", self.temperature)
-        layout.addLayout(form)
-        self.machine_info = QLabel()
-        self.machine_info.setWordWrap(True)
-        layout.addWidget(self.machine_info)
-        row = QHBoxLayout()
-        load = QPushButton("Load machine…")
-        load.clicked.connect(self.load_machine)
-        export = QPushButton("Export…")
-        export.clicked.connect(self.export_machine)
-        row.addWidget(load)
-        row.addWidget(export)
-        layout.addLayout(row)
-        layout.addStretch(1)
-        self._dock("Machine", w, Qt.DockWidgetArea.LeftDockWidgetArea)
-
-    def _build_scene_dock(self) -> None:
-        w = QWidget()
-        layout = QVBoxLayout(w)
-        self.scene_list = QListWidget()
-        self.scene_list.currentRowChanged.connect(self._select_object)
-        layout.addWidget(self.scene_list)
-        buttons = QGridLayout()
-        for i, (text, slot) in enumerate(
-            (
-                ("Load sample CAD…", self.load_sample),
-                ("Demo sample", self.add_demo_sample),
-                ("Add box fixture", lambda: self.add_fixture("box")),
-                ("Add cylinder fixture", lambda: self.add_fixture("cylinder")),
-                ("Load fixture CAD…", self.load_fixture),
-                ("Remove", self.remove_selected),
-            )
-        ):
-            b = QPushButton(text)
-            b.clicked.connect(slot)
-            buttons.addWidget(b, i // 2, i % 2)
-        layout.addLayout(buttons)
-        group = QGroupBox("Placement (machine coordinates)")
-        grid = QGridLayout(group)
-        self.pose_boxes: list[QDoubleSpinBox] = []
-        for i, name in enumerate(("X", "Y", "Z", "RX", "RY", "RZ")):
-            box = _spin(-5000, 5000, 0.0, 1.0 if i < 3 else 5.0, 3)
-            box.valueChanged.connect(self._pose_edited)
-            self.pose_boxes.append(box)
-            grid.addWidget(QLabel(name), i % 3, (i // 3) * 2)
-            grid.addWidget(box, i % 3, (i // 3) * 2 + 1)
-        self.on_rotary_check = QCheckBox("Mounted on rotary table")
-        self.on_rotary_check.toggled.connect(self._on_rotary_toggled)
-        self.visible_check = QCheckBox("Visible")
-        self.visible_check.setChecked(True)
-        self.visible_check.toggled.connect(self._visible_toggled)
-        drop = QPushButton("Rest on table, centre")
-        drop.clicked.connect(self.rest_selected)
-        grid.addWidget(self.on_rotary_check, 3, 0, 1, 4)
-        grid.addWidget(self.visible_check, 4, 0, 1, 2)
-        grid.addWidget(drop, 4, 2, 1, 2)
-        layout.addWidget(group)
-        self._dock("Scene", w, Qt.DockWidgetArea.RightDockWidgetArea)
-
-    def _build_jog_dock(self) -> None:
-        w = QWidget()
-        layout = QVBoxLayout(w)
-        self.dro = QLabel()
-        self.dro.setStyleSheet("font-family: monospace; font-size: 13px;")
-        self.state_label = QLabel()
-        self.state_label.setWordWrap(True)
-        layout.addWidget(self.dro)
-        layout.addWidget(self.state_label)
-        step_row = QHBoxLayout()
-        step_row.addWidget(QLabel("Jog step mm"))
-        self.jog_step = _spin(0.01, 200, 5.0, 1.0, 2)
-        step_row.addWidget(self.jog_step)
-        layout.addLayout(step_row)
-        grid = QGridLayout()
-        for col, axis in enumerate("XYZ"):
-            for row, sign in enumerate((1, -1)):
-                b = QPushButton(f"{'+' if sign > 0 else '-'}{axis}")
-                b.clicked.connect(lambda _=False, a=col, s=sign: self._jog(a, s))
-                grid.addWidget(b, row, col)
-        layout.addLayout(grid)
-        stats = QHBoxLayout()
-        self.stats_label = QLabel()
-        clear = QPushButton("Clear points")
-        clear.clicked.connect(self.twin.clear_measurements)
-        stats.addWidget(self.stats_label)
-        stats.addWidget(clear)
-        layout.addLayout(stats)
-        layout.addStretch(1)
-        self._dock("Machine position", w, Qt.DockWidgetArea.RightDockWidgetArea)
-
-    def _build_panels(self) -> None:
-        self.tool_panel = ToolPanel(self.twin)
-        self.check_panel = CheckPanel(self.twin, self.host.submit, lambda: self.host.port)
-        self.safety_panel = SafetyPanel(self.twin)
+        tools = QTabWidget()
+        tools.addTab(self.tool_panel, load_icon("tool"), "Edit")
+        tools.addTab(self.tool_creator, load_icon("add"), "Create")
+        self.tools_tabs = tools
         right = Qt.DockWidgetArea.RightDockWidgetArea
-        tools = self._dock("Tools", self.tool_panel, right)
-        check = self._dock("Check artefact", self.check_panel, right)
-        safety = self._dock("Safety", self.safety_panel, right)
-        scene = next(d for d in self.findChildren(QDockWidget) if d.windowTitle() == "Scene")
-        for dock in (tools, check, safety):
-            self.tabifyDockWidget(scene, dock)
-        scene.raise_()
+        pages = QTabWidget()
+        pages.setTabPosition(QTabWidget.TabPosition.North)
+        pages.addTab(self.machine_panel, load_icon("machine"), "Machine")
+        pages.addTab(tools, load_icon("tool"), "Tools")
+        pages.addTab(self.teach_panel, load_icon("teach"), "Teach-in")
+        pages.addTab(self.check_panel, load_icon("check"), "Check")
+        pages.addTab(self.safety_panel, load_icon("safety"), "Safety")
+        self.pages = pages
+        self.right_dock = self._dock("Machine and tools", pages, right)
+        self.right_dock.setMinimumWidth(380)
 
-    def _build_log_dock(self) -> None:
-        w = QWidget()
-        layout = QVBoxLayout(w)
-        self.log = QPlainTextEdit()
+        log = QWidget()
+        layout = QVBoxLayout(log)
+        layout.setContentsMargins(6, 4, 6, 4)
+        row = QHBoxLayout()
+        self.wire_check = QCheckBox("Protocol lines")
+        self.wire_check.setChecked(True)
+        self.wire_check.setToolTip("Show every line the client and the server exchange")
+        clear = QPushButton(load_icon("clear"), "Clear")
+        clear.clicked.connect(lambda: self.log.clear())
+        self.stats_label = QLabel()
+        row.addWidget(self.wire_check)
+        row.addWidget(self.stats_label, 1)
+        row.addWidget(clear)
+        layout.addLayout(row)
+        self.log: QPlainTextEdit = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(_LOG_LIMIT)
         self.log.setStyleSheet("font-family: monospace;")
-        row = QHBoxLayout()
-        self.wire_check = QCheckBox("Show protocol lines")
-        self.wire_check.setChecked(True)
-        clear = QPushButton("Clear")
-        clear.clicked.connect(self.log.clear)
-        row.addWidget(self.wire_check)
-        row.addStretch(1)
-        row.addWidget(clear)
-        layout.addLayout(row)
         layout.addWidget(self.log)
-        self._dock("Log", w, Qt.DockWidgetArea.BottomDockWidgetArea)
+        self.log_dock = self._dock("Log", log, Qt.DockWidgetArea.BottomDockWidgetArea)
+        self.resizeDocks([self.log_dock], [140], Qt.Orientation.Vertical)
+
+    # -- actions ------------------------------------------------------------------------------
+
+    def _action(
+        self,
+        icon: str,
+        text: str,
+        slot: object,
+        shortcut: str | QKeySequence.StandardKey | None = None,
+        tip: str = "",
+        *,
+        checkable: bool = False,
+    ) -> QAction:
+        action = QAction(load_icon(icon), text, self)
+        action.setCheckable(checkable)
+        if shortcut is not None:
+            action.setShortcut(shortcut)
+        action.setToolTip(
+            f"{tip or text}" + (f" ({action.shortcut().toString()})" if shortcut else "")
+        )
+        action.setStatusTip(tip or text)
+        if checkable:
+            action.toggled.connect(slot)
+        else:
+            action.triggered.connect(lambda _=False: slot())  # type: ignore[operator]
+        return action
+
+    def _build_actions(self) -> None:
+        self.server_action = self._action(
+            "server-start", "Start server", self.toggle_server, "F5", "Let a client connect"
+        )
+        self.estop_action = self._action(
+            "abort",
+            "Emergency stop",
+            self._estop_toggled,
+            "Ctrl+E",
+            "Press the emergency stop: the machine brakes and loses its reference",
+            checkable=True,
+        )
+        self.open_action = self._action(
+            "open",
+            "Open sample",
+            self.load_sample,
+            QKeySequence.StandardKey.Open,
+            "Load a CAD part",
+        )
+        self.demo_action = self._action(
+            "sample", "Demo block", self.add_demo_sample, None, "Place the built-in demo block"
+        )
+        self.artifact_action = self._action(
+            "check",
+            "Check artefact",
+            self.check_panel.add_artifact,
+            None,
+            "Place the check artefact",
+        )
+        self.view_group = QActionGroup(self)
+        self.view_actions: dict[str, QAction] = {}
+        for name, icon, text, key in _VIEWS:
+            action = self._action(
+                icon,
+                text,
+                lambda on, n=name: self._view_toggled(n, on),
+                key,
+                f"{text} camera",
+                checkable=True,
+            )
+            self.view_group.addAction(action)
+            self.view_actions[name] = action
+        self.view_actions["isometric"].setChecked(True)
+        self.fit_action = self._action(
+            "view-fit",
+            "Fit",
+            lambda: self.set_view("fit"),
+            "F",
+            "Fit the whole machine in the view",
+        )
+        self.screenshot_action = self._action(
+            "view-front", "Screenshot", self.save_screenshot, None, "Save the 3D view as an image"
+        )
+
+    def _build_toolbars(self) -> None:
+        server = QToolBar("Server")
+        server.setMovable(False)
+        server.setObjectName("Server")
+        server.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.addToolBar(server)
+        self.host_edit = QLineEdit("127.0.0.1")
+        self.host_edit.setFixedWidth(130)
+        self.host_edit.setToolTip("Address the server listens on")
+        self.port_spin = QSpinBox()
+        self.port_spin.setRange(0, 65535)
+        self.port_spin.setValue(DEFAULT_PORT)
+        self.port_spin.setToolTip("Port of the server (0 picks a free one)")
+        server.addWidget(QLabel(" Listen on "))
+        server.addWidget(self.host_edit)
+        server.addWidget(QLabel(" : "))
+        server.addWidget(self.port_spin)
+        server.addAction(self.server_action)
+        server.addAction(self.estop_action)
+
+        scene = QToolBar("Scene")
+        scene.setMovable(False)
+        scene.setObjectName("Scene")
+        scene.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.addToolBar(scene)
+        scene.addAction(self.open_action)
+        scene.addAction(self.demo_action)
+        fixture = QToolButton()
+        fixture.setText("Fixture")
+        fixture.setIcon(load_icon("fixture"))
+        fixture.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        fixture.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(fixture)
+        menu.addAction("Box", lambda: self.scene_panel.add_fixture("box"))
+        menu.addAction("Cylinder", lambda: self.scene_panel.add_fixture("cylinder"))
+        menu.addAction("From CAD…", self.scene_panel.load_fixture)
+        fixture.setMenu(menu)
+        fixture.setToolTip("Add a fixture to hold the sample")
+        scene.addWidget(fixture)
+        scene.addAction(self.artifact_action)
+
+        views = QToolBar("Views")
+        views.setMovable(False)
+        views.setObjectName("Views")
+        views.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.addToolBar(views)
+        for action in self.view_actions.values():
+            views.addAction(action)
+        views.addAction(self.fit_action)
+        views.addAction(self.screenshot_action)
+
+        work = QToolBar("Work")
+        work.setMovable(False)
+        work.setObjectName("Work")
+        work.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.addToolBar(work)
+        for icon, text, page, tip in (
+            ("teach", "Teach-in", self.teach_panel, "Jog box, manual points and programs"),
+            (
+                "library",
+                "Tool library",
+                self.tool_creator,
+                "Build a tool from the component library",
+            ),
+            ("safety", "Safety", self.safety_panel, "Emergency stop, air supply, qualification"),
+        ):
+            action = self._action(icon, text, lambda p=page: self.show_page(p), None, tip)
+            work.addAction(action)
 
     def _build_menus(self) -> None:
-        file_menu = self.menuBar().addMenu("&File")
-        for text, slot in (
-            ("Load sample CAD…", self.load_sample),
-            ("Load machine…", self.load_machine),
-            ("Export machine…", self.export_machine),
-            ("Save screenshot…", self.save_screenshot),
-        ):
-            action = QAction(text, self)
-            action.triggered.connect(slot)
-            file_menu.addAction(action)
+        bar = self.menuBar()
+        file_menu = bar.addMenu("&File")
+        file_menu.addAction(self.open_action)
+        file_menu.addAction("Load fixture CAD…", self.scene_panel.load_fixture)
         file_menu.addSeparator()
+        file_menu.addAction("Load machine…", self.machine_panel.load_machine)
+        file_menu.addAction("Export machine…", self._export_machine)
+        file_menu.addSeparator()
+        file_menu.addAction(self.screenshot_action)
         quit_action = QAction("Quit", self)
+        quit_action.setShortcut(QKeySequence.StandardKey.Quit)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
-        view_menu = self.menuBar().addMenu("&View")
-        reset = QAction("Reset camera", self)
-        reset.triggered.connect(self.viewport.fit)
-        view_menu.addAction(reset)
+
+        machine_menu = bar.addMenu("&Machine")
+        machine_menu.addAction(self.server_action)
+        machine_menu.addAction(self.estop_action)
+
+        view_menu = bar.addMenu("&View")
+        for action in self.view_actions.values():
+            view_menu.addAction(action)
+        view_menu.addAction(self.fit_action)
+        view_menu.addSeparator()
         for text, attr in (
             ("Show machine", "show_machine"),
             ("Show probed points", "show_contacts"),
@@ -310,19 +377,46 @@ class MainWindow(QMainWindow):
             action.setChecked(True)
             action.toggled.connect(lambda on, a=attr: self._set_view_flag(a, on))
             view_menu.addAction(action)
+        view_menu.addSeparator()
         for dock in self.findChildren(QDockWidget):
             view_menu.addAction(dock.toggleViewAction())
 
-    # -- server ------------------------------------------------------------------------
+    # -- views --------------------------------------------------------------------------------
+
+    def set_view(self, name: str) -> None:
+        """Switch the camera (``isometric``, ``top``, ``front``, ``right``, ``follow``, ...)."""
+        if name in VIEW_PRESETS or name in FOLLOW_VIEWS or name == "fit":
+            self.viewport.set_view(name)
+            if name in self.view_actions:
+                self.view_actions[name].setChecked(True)
+
+    def _view_toggled(self, name: str, on: bool) -> None:
+        if on:
+            self.set_view(name)
 
     def _set_view_flag(self, name: str, on: bool) -> None:
         setattr(self.viewport, name, on)
         self.viewport.update()
 
+    def show_page(self, page: QWidget) -> None:
+        """Bring a panel of the right dock to the front."""
+        self.right_dock.show()
+        if page is self.tool_creator:
+            self.pages.setCurrentWidget(self.tools_tabs)
+            self.tools_tabs.setCurrentWidget(self.tool_creator)
+        else:
+            self.pages.setCurrentWidget(page)
+
+    # -- server -------------------------------------------------------------------------------
+
     def toggle_server(self) -> None:
         if self.host.running:
             self.host.stop()
-            self.start_button.setText("Start server")
+            self.server_action.setIcon(load_icon("server-start"))
+            self.server_action.setText("Start server")
+            self.host_edit.setEnabled(True)
+            self.port_spin.setEnabled(True)
+            self.strip.set_server(False)
             self.statusBar().showMessage("Server stopped")
             return
         try:
@@ -332,195 +426,61 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Cannot start the server", str(error))
             return
         self.port_spin.setValue(port)
-        self.class_label.setText(str(server.machine_class))
-        self.start_button.setText("Stop server")
-        self.statusBar().showMessage(f"Listening on {self.host_edit.text()}:{port}")
+        self.server_action.setIcon(load_icon("server-stop"))
+        self.server_action.setText("Stop server")
+        self.host_edit.setEnabled(False)
+        self.port_spin.setEnabled(False)
+        address = f"{self.host_edit.text()}:{port}"
+        self.strip.set_server(True, address)
+        self.statusBar().showMessage(f"A client can connect to {address}", 6000)
 
-    # -- machine -----------------------------------------------------------------------
+    def _estop_toggled(self, pressed: bool) -> None:
+        if self.safety_panel.estop.isChecked() != pressed:
+            self.safety_panel.estop.setChecked(pressed)
+        self.estop_action.setText("Release emergency stop" if pressed else "Emergency stop")
 
-    def _preset_changed(self, name: str) -> None:
-        if name in PRESETS:
-            self.twin.set_machine(MachineModel.default(name, rotary=self.rotary_check.isChecked()))
-            self._refresh_machine_info()
-            self.viewport.fit()
-
-    def load_machine(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load machine", "", "machine.toml or STEP (*.toml *.step *.stp);;All files (*)"
-        )
-        if not path:
-            return
-        try:
-            p = Path(path)
-            model = (
-                MachineModel.from_directory(p.parent)
-                if p.suffix.lower() == ".toml"
-                else MachineModel.from_step(p)
-            )
-        except (CadError, OSError, ValueError, KeyError) as error:
-            QMessageBox.critical(self, "Cannot load the machine", str(error))
-            return
-        self.twin.set_machine(model)
-        self._refresh_machine_info()
-        self.viewport.fit()
-
-    def export_machine(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "Export machine to directory")
-        if directory:
-            path = self.twin.machine.export(directory)
-            self.statusBar().showMessage(f"Wrote {path}")
-
-    def _refresh_machine_info(self) -> None:
-        s = self.twin.machine.spec
-        derived = f"\nEstimated from CAD: {', '.join(s.derived)}" if s.derived else ""
-        self.machine_info.setText(
-            f"{s.name}\nTravel {s.travel[0]:g} x {s.travel[1]:g} x {s.travel[2]:g} mm\n"
-            f"{s.max_speed:g} mm/s, {s.acceleration:g} mm/s²\n"
-            f"MPE_E = {s.accuracy.a_um:g} + L/{s.accuracy.k:g} µm, "
-            f"MPE_P = {s.accuracy.probing_um:g} µm"
-            f"{derived}"
-        )
-
-    # -- scene -------------------------------------------------------------------------
-
-    def _cad_dialog(self, title: str) -> str:
-        path, _ = QFileDialog.getOpenFileName(self, title, "", _CAD_FILTER)
-        return path
-
-    def load_sample(self) -> None:
-        path = self._cad_dialog("Load sample CAD")
+    def _export_machine(self) -> None:
+        path = self.machine_panel.export_machine()
         if path:
-            self._add(lambda: self.twin.load_sample(path))
+            self.statusBar().showMessage(f"Wrote {path}", 6000)
 
-    def load_fixture(self) -> None:
-        path = self._cad_dialog("Load fixture CAD")
-        if path:
-            self._add(
-                lambda: self.twin.place_sample(
-                    SceneObject.from_file(path, "fixture"), replace=False
-                )
-            )
-
-    def add_demo_sample(self) -> None:
-        self._add(lambda: self.twin.place_sample(demo_sample()))
-
-    def add_fixture(self, kind: str) -> None:
-        size = (60.0, 40.0, 25.0) if kind == "box" else (20.0, 40.0, 0.0)
-        s = self.twin.machine.spec
-        self._add(
-            lambda: self.twin.add_fixture(
-                kind, size, (s.travel[0] / 2 + 100, s.travel[1] / 2, s.table_top_z)
-            )
-        )
-
-    def _add(self, make: object) -> None:
-        try:
-            obj = make()  # type: ignore[operator]
-        except (CadError, OSError) as error:
-            QMessageBox.critical(self, "Cannot load the file", str(error))
-            return
-        self._refresh_scene_list(select=obj)
-
-    def remove_selected(self) -> None:
-        if self._selected is not None:
-            self.twin.remove_object(self._selected)
-            self._selected = None
-            self._refresh_scene_list()
-
-    def rest_selected(self) -> None:
-        if self._selected is None:
-            return
-        obj = self._selected
-        self.twin.rest_on_table(obj)
-        self.twin.set_pose(obj, obj.pose)
-        self._load_pose(obj)
-
-    def _refresh_scene_list(self, select: SceneObject | None = None) -> None:
-        self.scene_list.blockSignals(True)
-        self.scene_list.clear()
-        for obj in self.twin.objects:
-            item = QListWidgetItem(f"[{obj.kind}] {obj.name}")
-            item.setData(Qt.ItemDataRole.UserRole, obj.id)
-            self.scene_list.addItem(item)
-        self.scene_list.blockSignals(False)
-        row = next((i for i, o in enumerate(self.twin.objects) if o is select), -1)
-        if row < 0 and self.twin.objects:
-            row = 0
-        self.scene_list.setCurrentRow(row)
-        self._select_object(row)
-
-    def _select_object(self, row: int) -> None:
-        self._selected = self.twin.objects[row] if 0 <= row < len(self.twin.objects) else None
-        if self._selected is not None:
-            self._load_pose(self._selected)
-
-    def _load_pose(self, obj: SceneObject) -> None:
-        self._updating_pose = True
-        for box, value in zip(self.pose_boxes, geometry.decompose(obj.pose), strict=True):
-            box.setValue(value)
-        self.on_rotary_check.setChecked(obj.on_rotary)
-        self.visible_check.setChecked(obj.visible)
-        self._updating_pose = False
-
-    def _pose_edited(self) -> None:
-        if self._updating_pose or self._selected is None:
-            return
-        self.twin.set_pose(self._selected, geometry.pose(*(b.value() for b in self.pose_boxes)))
-
-    def _on_rotary_toggled(self, on: bool) -> None:
-        if not self._updating_pose and self._selected is not None:
-            self._selected.on_rotary = on
-            self.twin.set_pose(self._selected, self._selected.pose)
-
-    def _visible_toggled(self, on: bool) -> None:
-        if not self._updating_pose and self._selected is not None:
-            self._selected.visible = on
-            self.twin.set_pose(self._selected, self._selected.pose)
-
-    # -- jog and status ----------------------------------------------------------------
-
-    def _jog(self, axis: int, sign: int) -> None:
-        delta = [0.0, 0.0, 0.0]
-        delta[axis] = sign * self.jog_step.value()
-        if not self.twin.jog(*delta):
-            self.statusBar().showMessage(
-                "Jog needs a connected client with the jog box enabled, within the machine volume",
-                4000,
-            )
+    # -- status and events ----------------------------------------------------------------------
 
     def _tick(self) -> None:
         snap = self.twin.snapshot()
-        self.dro.setText(
-            f"X {snap.position[0]:10.3f}\nY {snap.position[1]:10.3f}\n"
-            f"Z {snap.position[2]:10.3f}\nR {snap.rotary:10.3f}"
-        )
-        flags = [
-            "moving" if snap.moving else "idle",
-            "homed" if snap.homed else "not homed",
-            f"tool {snap.tool_name} ({snap.tool_mode})",
-            "qualified" if snap.qualified else "not qualified",
-        ]
-        if snap.estop:
-            flags.append("EMERGENCY STOP")
-        if not snap.air_ok:
-            flags.append("no air")
-        self.state_label.setText(", ".join(flags) + (f"\n{snap.error}" if snap.error else ""))
-        self.client_label.setText(snap.peer or "no client")
+        self.strip.update_from(snap)
         self.stats_label.setText(
-            f"{len(self.twin.contacts)} points, {sum(len(c) for c in self.twin.clouds)} scan points"
+            f"{len(self.twin.contacts)} probed points, "
+            f"{sum(len(c) for c in self.twin.clouds)} scan points"
         )
-        if snap.machine_class:
-            self.class_label.setText(snap.machine_class)
-        self.viewport.update()
+        if self.estop_action.isChecked() != snap.estop:
+            self.estop_action.blockSignals(True)
+            self.estop_action.setChecked(snap.estop)
+            self.estop_action.blockSignals(False)
+        # Painting the scene is the expensive part: only repaint when something changed.
+        key = (
+            snap.position,
+            snap.rotary,
+            snap.tool_name,
+            snap.head_position,
+            snap.changing_tool,
+            self.twin.scene_version,
+            len(self.twin.contacts),
+            len(self.twin.clouds),
+        )
+        if key != self._painted_key:
+            self._painted_key = key
+            self.viewport.update()
 
     def _on_event(self, event: object) -> None:
         if not isinstance(event, TwinEvent):
             return
         if event.kind in ("scene", "machine", "tools"):
             if event.kind == "machine":
-                self._refresh_machine_info()
+                self.machine_panel.refresh()
             if event.kind in ("machine", "tools"):
                 self.tool_panel.refresh()
+                self.teach_panel.refresh_tools()
             return
         if event.kind in ("qualified", "safety"):
             self.safety_panel.refresh()
@@ -541,5 +501,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self._timer.stop()
+        self.teach_panel.shutdown()
+        self.check_panel.shutdown()
         self.host.shutdown()
         super().closeEvent(event)

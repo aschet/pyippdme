@@ -68,6 +68,9 @@ class MachineSpec:
     require_home: bool = True
     #: Rotary table: speed in degrees/s; ``None`` axis origin means no rotary table.
     rotary_speed: float = 90.0
+    #: Size of the rotary table top (a cylinder) in millimetres.
+    rotary_diameter: float = 300.0
+    rotary_height: float = 20.0
     rotary_origin: Vec3 | None = None
     rotary_axis: Vec3 = (0.0, 0.0, 1.0)
     #: Height of the table surface below the machine zero.
@@ -101,6 +104,27 @@ PRESETS: dict[str, MachineSpec] = {
         520.0,
         1000.0,
         accuracy=Accuracy(1.9, 300.0, 1.9),
+    ),
+    "bridge-compact": MachineSpec(
+        "Compact bridge CMM 500/500/450",
+        (500.0, 500.0, 450.0),
+        400.0,
+        1000.0,
+        accuracy=Accuracy(2.2, 250.0, 2.2),
+    ),
+    "bridge-shopfloor": MachineSpec(
+        "Shop-floor bridge CMM 700/1000/600",
+        (700.0, 1000.0, 600.0),
+        600.0,
+        1500.0,
+        accuracy=Accuracy(3.0, 250.0, 3.0),
+    ),
+    "gantry-large": MachineSpec(
+        "Gantry CMM 2000/3000/1500",
+        (2000.0, 3000.0, 1500.0),
+        500.0,
+        600.0,
+        accuracy=Accuracy(6.0, 200.0, 4.0),
     ),
     "bridge-high-precision": MachineSpec(
         "High-precision bridge CMM 1000/1200/700",
@@ -454,8 +478,13 @@ def parse_manifest(data: dict[str, object], *, base: MachineSpec | None = None) 
         r: dict[str, object] = dict(rotary)  # type: ignore[call-overload]
         changes["rotary_origin"] = _vec(r.get("origin"))
         changes["rotary_axis"] = _vec(r.get("axis"), (0.0, 0.0, 1.0))
-        if "speed" in r:
-            changes["rotary_speed"] = float(r["speed"])  # type: ignore[arg-type]
+        for key, field_name in (
+            ("speed", "rotary_speed"),
+            ("diameter", "rotary_diameter"),
+            ("height", "rotary_height"),
+        ):
+            if key in r:
+                changes[field_name] = float(r[key])  # type: ignore[arg-type]
     for key in ("name",):
         if key in m:
             changes[key] = str(m.pop(key))
@@ -559,6 +588,8 @@ def manifest_to_toml(manifest: MachineManifest) -> str:
             f"origin = [{o[0]}, {o[1]}, {o[2]}]",
             f"axis = [{a[0]}, {a[1]}, {a[2]}]",
             f"speed = {s.rotary_speed}",
+            f"diameter = {s.rotary_diameter}",
+            f"height = {s.rotary_height}",
         ]
     if manifest.origin is not None:
         o = manifest.origin

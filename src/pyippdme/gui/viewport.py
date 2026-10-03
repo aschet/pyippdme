@@ -45,6 +45,20 @@ def _look_at(eye: NDArray[np.float64], target: NDArray[np.float64]) -> NDArray[n
     return m
 
 
+#: Camera presets: ``(azimuth, elevation)`` in degrees, looking at the middle of the machine.
+VIEW_PRESETS: dict[str, tuple[float, float]] = {
+    "isometric": (-55.0, 28.0),
+    "front": (-90.0, 0.0),
+    "back": (90.0, 0.0),
+    "left": (180.0, 0.0),
+    "right": (0.0, 0.0),
+    "top": (-90.0, 89.0),
+}
+#: Views that follow the machine: ``follow`` orbits the tool centre point, ``probe`` is a camera
+#: mounted on the probe looking at the tip, ``table`` looks down on the table from above.
+FOLLOW_VIEWS = ("follow", "probe", "table")
+
+
 class Viewport(QWidget):
     """Orbit with the left button, pan with the right (or Shift), zoom with the wheel."""
 
@@ -76,8 +90,36 @@ class Viewport(QWidget):
     def fit(self) -> None:
         lo, hi = self.view.bounds()
         self.target = (np.asarray(lo) + np.asarray(hi)) / 2.0
-        self.distance = float(np.linalg.norm(np.asarray(hi) - np.asarray(lo))) * 1.6
+        self.distance = float(np.linalg.norm(np.asarray(hi) - np.asarray(lo))) * 2.0
         self.update()
+
+    #: Which camera is active: a preset, a follow view, or ``free`` after the mouse moved it.
+    camera = "isometric"
+
+    def set_view(self, name: str) -> None:
+        """Switch the camera: a name of :data:`VIEW_PRESETS`, :data:`FOLLOW_VIEWS` or ``fit``."""
+        if name == "fit":
+            self.fit()
+            return
+        if name in VIEW_PRESETS:
+            azimuth, elevation = VIEW_PRESETS[name]
+            self.azimuth, self.elevation = math.radians(azimuth), math.radians(elevation)
+            self.fit()
+        elif name in FOLLOW_VIEWS:
+            if name == "follow":
+                self.distance = min(self.distance, 400.0)
+            if name == "table":
+                self.elevation = math.radians(89.0)
+                self.fit()
+                self.distance *= 0.7
+        else:
+            raise ValueError(f"unknown view {name!r}")
+        self.camera = name
+        self.update()
+
+    def _tool_pose(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        snap = self.view.snapshot()
+        return np.asarray(snap.position, dtype=float), np.asarray(snap.tool_axis, dtype=float)
 
     def focus_on(self, point: tuple[float, float, float], distance: float | None = None) -> None:
         self.target = np.asarray(point, dtype=float)
@@ -87,12 +129,26 @@ class Viewport(QWidget):
 
     def _eye(self) -> NDArray[np.float64]:
         c = math.cos(self.elevation)
-        return self.target + self.distance * np.array(
+        return self._look_target() + self.distance * np.array(
             [c * math.cos(self.azimuth), c * math.sin(self.azimuth), math.sin(self.elevation)]
         )
 
+    def _look_target(self) -> NDArray[np.float64]:
+        if self.camera in ("follow", "probe"):
+            return self._tool_pose()[0]
+        return self.target
+
     def _view_matrix(self) -> NDArray[np.float64]:
-        return _look_at(self._eye(), self.target)
+        if self.camera == "probe":
+            tcp, axis = self._tool_pose()
+            norm = float(np.linalg.norm(axis)) or 1.0
+            axis = axis / norm
+            side = np.cross(axis, np.array([0.0, 1.0, 0.0]))
+            if np.linalg.norm(side) < 1e-6:
+                side = np.array([1.0, 0.0, 0.0])
+            side = side / np.linalg.norm(side)
+            return _look_at(tcp + axis * 60.0 + side * 35.0, tcp)
+        return _look_at(self._eye(), self._look_target())
 
     def _project(
         self, world: NDArray[np.float64], view: NDArray[np.float64]
@@ -130,6 +186,12 @@ class Viewport(QWidget):
         else:
             self.azimuth -= d.x() * 0.008
             self.elevation = max(-1.5, min(1.5, self.elevation + d.y() * 0.008))
+        if (
+            (pan and self.camera in ("follow", "probe"))
+            or self.camera in VIEW_PRESETS
+            or self.camera == "table"
+        ):
+            self.camera = "free"
         self._begin_interaction()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
@@ -202,7 +264,7 @@ class Viewport(QWidget):
 
     def _paint(self, painter: QPainter) -> None:
         view = self._view_matrix()
-        eye = self._eye()
+        eye = -view[:3, :3].T @ view[:3, 3]
         items = self.view.draw_items()
         self._cache = {k: v for k, v in self._cache.items() if k in {i.key for i in items}}
 
@@ -294,13 +356,8 @@ class Viewport(QWidget):
             painter.setPen(QPen(QColor(255, 220, 60), 1.5))
             painter.drawLine(QPointF(x - 9, y), QPointF(x + 9, y))
             painter.drawLine(QPointF(x, y - 9), QPointF(x, y + 9))
-        painter.setPen(QColor(190, 200, 215))
-        painter.drawText(
-            10,
-            18,
-            f"X {snap.position[0]:9.3f}  Y {snap.position[1]:9.3f}  Z {snap.position[2]:9.3f}"
-            f"  R {snap.rotary:7.2f}   {snap.tool_name}",
-        )
+        painter.setPen(QColor(150, 160, 175))
+        painter.drawText(10, self.height() - 10, f"Camera: {self.camera}")
 
     def _points(
         self,

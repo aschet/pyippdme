@@ -216,4 +216,133 @@ def test_safety_panel_presses_the_emergency_stop(window: MainWindow) -> None:
     assert not window.twin.air_ok
     panel.air.setChecked(True)
     window._tick()
-    assert "qualified" in window.state_label.text()
+    assert "qualified" in window.strip.tool.text()
+
+
+def test_the_status_strip_follows_the_machine(window: MainWindow) -> None:
+    window._tick()
+    assert window.strip.server.state == "off"
+    assert window.strip.homed.state == "off"
+    window.toggle_server()
+    assert window.strip.server.state == "on"
+    assert "Listening" in window.strip.server.text
+    window.safety_panel.estop.setChecked(True)
+    window._tick()
+    assert window.strip.safety.state == "error"
+    assert window.estop_action.isChecked()
+    window.estop_action.setChecked(False)
+    assert not window.twin.estop
+    window.toggle_server()
+
+
+def test_every_camera_view_draws_something(window: MainWindow) -> None:
+    window.add_demo_sample()
+    for name in ("isometric", "top", "front", "right", "follow", "probe", "table", "fit"):
+        window.set_view(name)
+        assert window.viewport.render_to_image(240, 160).width() == 240
+    window.set_view("probe")
+    assert window.view_actions["probe"].isChecked()
+    assert window.viewport.camera == "probe"
+
+
+def test_the_tool_creator_adds_a_tool_the_protocol_offers(window: MainWindow) -> None:
+    creator = window.tool_creator
+    creator.combos["sensor"].setCurrentText("scanning probe")
+    creator.combos["head"].setCurrentText("indexing head (PH10)")
+    creator.combos["tip"].setCurrentText("ball 6 mm")
+    creator.name_edit.setText("MyScan")
+    creator.add_tool()
+    spec = window.twin.machine.tools["MyScan"]
+    assert spec.mode == "scanning"
+    assert spec.head == "indexed"
+    assert spec.ball_radius == pytest.approx(3.0)
+    creator.combos["sensor"].setCurrentText("laser line scanner")
+    assert not creator.combos["stylus"].isEnabled()  # an optical sensor has no stylus
+    creator.name_edit.setText("bad name")
+    creator.add_tool()
+    assert "letters and digits" in creator.status.text()
+
+
+def test_the_machine_panel_offers_the_library(window: MainWindow) -> None:
+    panel = window.machine_panel
+    assert panel.preset_combo.currentText() == "bridge-700"
+    panel.preset_combo.setCurrentText("gantry-large")
+    assert window.twin.machine.spec.travel[0] == 2000.0
+    panel.rotary_combo.setCurrentText("rotary table 500 mm")
+    spec = window.twin.machine.spec
+    assert spec.rotary_origin is not None
+    assert spec.rotary_diameter == 500.0
+
+
+def test_teach_in_events_reach_the_client(window: MainWindow) -> None:
+    window.add_demo_sample()
+    window.toggle_server()
+    port = window.host.port
+    assert port
+    lo, _ = window.twin.objects[0].world_bounds(window.twin.machine.rotary_pose(0.0))
+    top = float(lo[2]) + 30.0
+
+    async def session() -> list[object]:
+        machine = await IppDmeMachine.connect("127.0.0.1", port)
+        await machine.start_session()
+        await machine.dme.home()
+        await machine.mover.enable_user()
+        events = machine.client.unsolicited_events()
+        window.twin._pos = (float(lo[0]) + 10.0, float(lo[1]) + 45.0, top + 20.0)
+        window.teach_panel.press("Done")
+        window.teach_panel.pick()
+        window.teach_panel.clearance()
+        got = []
+        async for event in events:
+            got.append(event.data.to_wire())
+            if len(got) == 3:
+                break
+        await machine.close()
+        return got
+
+    future = window.host.submit(session())
+    while not future.done():
+        _pump(0.02)
+    wires = future.result()
+    assert "KeyPress" in wires[0]
+    assert wires[1].startswith("PtMeas")
+    assert wires[2].startswith("GoTo")
+    assert len(window.twin.contacts) == 1
+    window.toggle_server()
+
+
+def test_the_teach_panel_plans_and_runs_a_program(
+    window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pyippdme.gui import teach_panel
+
+    def quick(twin: object, points: list[object], **_: object) -> list[str]:
+        # Planning every point of the artefact takes a minute; the real planner is tested with
+        # ``test_an_offline_program_is_generated_and_simulated``.
+        return ["Home()", "EnableUser()", f"# {len(points)} points", "PtMeas(X(1),Y(2),Z(3))"]
+
+    monkeypatch.setattr(teach_panel, "touch_program", quick)
+    panel = window.teach_panel
+    panel.generate()
+    assert "artefact" in panel.status.text()
+    window.check_panel.add_artifact()
+    panel.per_feature.setValue(1)
+    panel.generate()
+    deadline = __import__("time").monotonic() + 120
+    while not panel.program.toPlainText() and __import__("time").monotonic() < deadline:
+        _pump(0.05)
+    lines = panel.commands()
+    assert lines[0] == "Home()"
+    assert any(line.startswith("PtMeas") for line in lines)
+    assert "# 24 points" in panel.program.toPlainText() or "# " in panel.program.toPlainText()
+    panel.program.setPlainText("# comment\nGetDMEVersion()\n")
+    assert panel.commands() == ["GetDMEVersion()"]
+    window.twin.clear_scene()  # the artefact's mesh is slow to paint while the program runs
+    window.toggle_server()
+    panel.run()
+    deadline = __import__("time").monotonic() + 20
+    while not panel.run_button.isEnabled() and __import__("time").monotonic() < deadline:
+        _pump(0.02)
+    assert panel.run_button.isEnabled(), panel.status.text()
+    assert "Program: done" in panel.status.text()
+    window.toggle_server()

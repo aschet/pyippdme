@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 from collections.abc import AsyncIterator
 
 import pytest
@@ -242,3 +243,63 @@ async def test_unknown_contour_scan_ends_in_a_sphere(
     ]
     assert points
     assert abs(points[-1][0] - (x0 + 50.0)) <= 3.0
+
+
+def test_a_collision_free_path_goes_over_the_sample() -> None:
+    twin = DigitalTwin(time_scale=0.0)
+    twin.place_sample(demo_sample())
+    lo, hi = twin.objects[0].world_bounds(twin.machine.rotary_pose(0.0))
+    y = float((lo[1] + hi[1]) / 2)
+    z = float(lo[2] + (hi[2] - lo[2]) / 2)  # half way up the block
+    start = (float(lo[0]) - 60.0, y, z)
+    end = (float(hi[0]) + 60.0, y, z)
+    assert not twin.segment_is_free(start, end)  # straight through the block
+    path = twin.plan_collision_free(end, start)
+    assert path is not None
+    assert path[0] == start
+    assert path[-1] == end
+    assert max(p[2] for p in path) > float(hi[2])  # up and over
+    assert all(twin.segment_is_free(a, b) for a, b in itertools.pairwise(path))
+
+
+async def test_an_offline_program_is_generated_and_simulated() -> None:
+    from pyippdme.twin.programs import run_program, touch_program
+
+    network = MemoryNetwork()
+    twin = DigitalTwin(time_scale=0.0, seed=2)
+    twin.place_sample(demo_sample())
+    lo, _ = twin.objects[0].world_bounds(twin.machine.rotary_pose(0.0))
+    top = float(lo[2]) + 30.0  # the top face of the block (the boss rises above it)
+    xs = [float(lo[0]) + 10.0, float(lo[0]) + 25.0, float(lo[0]) + 40.0]
+    y = float(lo[1]) + 45.0
+    points = [((x, y, top), (0.0, 0.0, 1.0)) for x in xs]
+    program = touch_program(twin, points, clearance=8.0)
+    assert program[0] == "Home()"
+    assert sum(line.startswith("PtMeas") for line in program) == 3
+    server = twin.create_server(network=network)
+    port = await server.start("127.0.0.1", 0)
+    done: list[tuple[str, bool]] = []
+    ok = await run_program(
+        "127.0.0.1", port, program, on_line=lambda t, o: done.append((t, o)), network=network
+    )
+    await server.close()
+    assert ok
+    assert len(done) == len(program)
+    assert len(twin.contacts) == 3
+    assert all(abs(c[2] - top) < 0.1 for c in twin.contacts)
+
+
+def test_picking_a_point_by_hand_records_the_touch() -> None:
+    twin = DigitalTwin(time_scale=0.0, seed=1)
+    twin.place_sample(demo_sample())
+    lo, _ = twin.objects[0].world_bounds(twin.machine.rotary_pose(0.0))
+    top = float(lo[2]) + 30.0
+    twin._pos = (float(lo[0]) + 10.0, float(lo[1]) + 45.0, top + 20.0)
+    picked = twin.pick_point()
+    assert picked is not None
+    point, normal = picked
+    assert abs(point[2] - top) < 0.1
+    assert normal[2] > 0.99
+    assert len(twin.contacts) == 1
+    twin._pos = (0.0, 0.0, 300.0)
+    assert twin.pick_point() is None  # nothing within reach

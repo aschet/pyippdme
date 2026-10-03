@@ -27,6 +27,7 @@ __all__ = [
     "scan_circle_lines",
     "scan_line_lines",
     "set_tool_line",
+    "speed_line",
     "speed_lines",
     "status_lines",
 ]
@@ -128,6 +129,11 @@ def speed_lines(block: str, speed: float | None, accel: float | None) -> list[st
     if accel is not None:
         lines.append(_line("SetProp", builders.set_prop(f"Tool.{block}.Accel", accel)))
     return lines
+
+
+def speed_line(block: str, parameter: str, value: float) -> str:
+    """Set one parameter of a block, e.g. ``speed_line("PtMeasPar", "Retract", -1)``."""
+    return _line("SetProp", builders.set_prop(f"Tool.{block}.{parameter}", value))
 
 
 def status_lines() -> list[str]:

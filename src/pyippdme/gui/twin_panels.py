@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from pyippdme.gui.evaluation import EvaluationTable
 from pyippdme.gui.icons import load_icon
 from pyippdme.gui.tool_editor import ToolEditor
+from pyippdme.loop import LoopThread
 from pyippdme.twin import DigitalTwin
 from pyippdme.twin.artifact import build_check_artifact, build_reference_sphere
 from pyippdme.twin.check import MODES, CheckOptions, run_check_against_server
@@ -138,14 +139,14 @@ class CheckPanel(QWidget):
     def __init__(
         self,
         twin: DigitalTwin,
-        run: Callable[[Any], Future[None]],
         port: Callable[[], int | None],
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.twin = twin
-        self._run = run
         self._port = port
+        #: The check program is a client; it runs on a loop of its own, not the server's.
+        self._runner = LoopThread("ippdme-check")
         self._future: Future[None] | None = None
         layout = QVBoxLayout(self)
         place = QHBoxLayout()
@@ -236,7 +237,7 @@ class CheckPanel(QWidget):
                 "127.0.0.1", port, data, options, lambda text: self.progress.emit(text)
             )
 
-        self._future = self._run(go())
+        self._future = self._runner.submit(go())
         self._future.add_done_callback(
             lambda f: self.finished.emit("" if f.exception() is None else str(f.exception()))
         )
@@ -249,6 +250,10 @@ class CheckPanel(QWidget):
         else:
             self.status.setText("Check program finished")
             self.evaluate()
+
+    def shutdown(self) -> None:
+        """Stop the helper thread (the window calls this when it closes)."""
+        self._runner.close()
 
 
 class SafetyPanel(QWidget):

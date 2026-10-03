@@ -361,10 +361,14 @@ def _parse_motion(
     """Parse the argument list of a move; raise ``0506`` for anything the command doesn't take."""
     singles: dict[str, float] = {}
     vectors: dict[str, tuple[float, ...]] = {}
+    seen: set[str] = set()
     for arg in args:
         if not isinstance(arg, NamedValue):
             raise bad_argument(cause, "Expected named arguments")
         name = arg.name
+        if name in seen:  # 5.3.4: an item may appear in an enumeration at most once
+            raise bad_argument(cause, f"{name} appears more than once")
+        seen.add(name)
         numbers = tuple(a.value for a in arg.args if isinstance(a, Number))
         if len(numbers) != len(arg.args):
             raise bad_argument(cause, f"{name} takes numbers only")
@@ -391,9 +395,23 @@ def _parse_motion(
                     else ""
                 ),
             )
+    if not seen - {"Sync"}:  # Tables 59, 60, 76: the enumeration is mandatory
+        raise ServerError(
+            ErrorSeverity.CRITICAL,
+            ErrorCode.INCORRECT_ARGUMENTS,
+            cause,
+            "At least one position or distance is required",
+        )
     ijk = vectors.get("IJK")
     if ijk is not None and len(ijk) != 3:
         raise bad_argument(cause, "Expected IJK(<i>,<j>,<k>)")
+    if ijk is not None and not any(ijk):  # Table 31
+        raise ServerError(
+            ErrorSeverity.ERROR,
+            ErrorCode.VECTOR_HAS_NO_NORM,
+            cause,
+            "The vector is the zero vector and cannot be normalized",
+        )
     return _Motion(
         singles.get("X"),
         singles.get("Y"),

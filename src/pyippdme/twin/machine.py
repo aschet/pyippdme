@@ -135,7 +135,9 @@ def _default_shape(name: str, spec: MachineSpec, slots: dict[str, Vec3]) -> cad.
         return shape
     if name == "rotary":
         o = spec.rotary_origin or (tx / 2, ty / 2, top)
-        return cad.make_cylinder(150.0, 20.0 - top, (o[0], o[1], top))
+        return cad.make_cylinder(
+            spec.rotary_diameter / 2.0, spec.rotary_height - top, (o[0], o[1], top)
+        )
     raise KeyError(name)
 
 

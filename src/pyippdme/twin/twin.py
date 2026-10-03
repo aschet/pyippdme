@@ -61,6 +61,7 @@ from pyippdme.twin.planning import (
     free_steps,
     plan_homing,
     plan_qualification,
+    plan_safe_path,
     plan_tool_change,
     point_along,
     profile_position,
@@ -526,6 +527,72 @@ class DigitalTwin:
             return False
         state.cart_cmm.position = self.to_client(target, context)
         return True
+
+    def pick_point(
+        self, direction: Vec3 = (0.0, 0.0, -1.0), reach: float = 60.0
+    ) -> tuple[Vec3, Vec3] | None:
+        """Touch the part by hand: probe along ``direction`` from here, up to ``reach`` mm.
+
+        This is what the user does at the jog box. Returns the measured point and the surface
+        normal (machine coordinates), moves the machine to the touch and records the point, or
+        returns ``None`` if the part is not within reach.
+        """
+        origin = self._pos
+        hit = self.cast(origin, direction)
+        if hit is None or hit[1] > reach:
+            return None
+        point = self.measure(origin, direction, mode=self.toolkit.spec(self.tool_name()).mode)
+        if point is None:
+            return None
+        normal = self.surface_normal(hit[0], scale(normalize(direction), -1.0))
+        state = self.state
+        if state is not None:
+            state.cart_cmm.position = self.to_client(
+                add(
+                    hit[0],
+                    scale(normalize(direction), -self.toolkit.spec(self.tool_name()).ball_radius),
+                )
+            )
+        return point, normal
+
+    # -- planning ----------------------------------------------------------------------
+
+    def segment_is_free(self, a: Vec3, b: Vec3) -> bool:
+        """Whether the active tool can move from ``a`` to ``b`` (machine coordinates) unhindered."""
+        request = MotionRequest(
+            "Plan", a, b, self._rotary, self._rotary, True, self.tool_name(), asyncio.Event()
+        )
+        _, hit = self.first_collision(request, probing=False)
+        return hit is None
+
+    def plan_collision_free(self, target: Vec3, start: Vec3 | None = None) -> list[Vec3] | None:
+        """Plan a collision-free path (machine coordinates) from ``start`` (default: here)."""
+        spec = self.machine.spec
+        upper = (spec.travel[0], spec.travel[1], spec.travel[2])
+        return plan_safe_path(start or self._pos, target, self.segment_is_free, upper)
+
+    async def go_safely(self, target: Vec3, cancel: asyncio.Event | None = None) -> list[Vec3]:
+        """Drive to ``target`` (machine coordinates) along a planned collision-free path.
+
+        Raises a protocol ``ServerError`` when the machine is not ready, and ``1011`` "unable to
+        move" when no free path is found. Returns the path that was driven.
+        """
+        self.check_ready("GoTo")
+        path = self.plan_collision_free(target)
+        if path is None:
+            raise ServerError(
+                ErrorSeverity.ERROR,
+                ErrorCode.UNABLE_TO_MOVE,
+                "GoTo",
+                "No collision-free path to the target was found",
+            )
+        params = self.protocol_parameters()
+        event = cancel or asyncio.Event()
+        await self.run_path(path, params["go_speed"], params["go_accel"], event, "GoTo")
+        state = self.state
+        if state is not None:
+            state.cart_cmm.position = self.to_client(path[-1])
+        return path
 
     def clear_scene(self) -> None:
         with self.lock:

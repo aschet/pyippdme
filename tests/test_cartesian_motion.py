@@ -135,3 +135,30 @@ async def test_go_to_on_circle_requires_all_arguments(started_client: IppDmeClie
             NamedValue(ParameterName.CENTER, (Number.of(0), Number.of(0), Number.of(0))),
         )
     assert excinfo.value.error.number == "0509"
+
+
+async def test_enumerations_must_not_be_empty_or_repeat_an_item(
+    started_client: IppDmeClient,
+) -> None:
+    """5.3.4 and Tables 59, 60, 76: the enumeration is mandatory and lists each item once."""
+    from pyippdme.exceptions import IppDmeServerError
+
+    for command in (CommandName.GO_TO, CommandName.STEP, CommandName.PT_MEAS):
+        with pytest.raises(IppDmeServerError, match="0502"):
+            await started_client.call(command)
+        await started_client.clear_all_errors()
+    with pytest.raises(IppDmeServerError, match="0502"):
+        await started_client.call(CommandName.GO_TO, NamedValue("Sync", (Number.of(1),)))
+    await started_client.clear_all_errors()
+    twice = (NamedValue("X", (Number.of(1),)), NamedValue("X", (Number.of(2),)))
+    with pytest.raises(IppDmeServerError, match="0509"):
+        await started_client.call(CommandName.GO_TO, *twice)
+
+
+async def test_a_zero_probing_vector_has_no_norm(started_client: IppDmeClient) -> None:
+    """Table 31: ``IJK(0,0,0)`` cannot be normalized (1010)."""
+    from pyippdme.exceptions import IppDmeServerError
+
+    zero = NamedValue("IJK", (Number.of(0), Number.of(0), Number.of(0)))
+    with pytest.raises(IppDmeServerError, match="1010"):
+        await started_client.call(CommandName.PT_MEAS, NamedValue("X", (Number.of(1),)), zero)

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import itertools
 import math
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 from pyippdme.types.vec3 import Vec3, add, scale
@@ -227,3 +228,51 @@ def plan_qualification(
         path += [away, touch, away]
     path.append(above)
     return path
+
+
+# -- collision-free paths ----------------------------------------------------------------
+
+#: Whether the straight move from the first point to the second is free of collisions.
+SegmentCheck = Callable[[Vec3, Vec3], bool]
+
+
+def safe_path_candidates(
+    start: Vec3, end: Vec3, upper: Vec3, *, heights: int = 4
+) -> Iterator[list[Vec3]]:
+    """Yield paths from ``start`` to ``end``, the shortest and simplest first.
+
+    The direct move; X then Y and Y then X at the height of the start or of the end; and over
+    the top at ``heights`` clearance heights between the higher of the two points and the top of
+    the volume ``upper`` (up, across, down).
+    """
+    yield [start, end]
+    sx, sy, sz = start
+    ex, ey, ez = end
+    for z in dict.fromkeys((sz, ez)):
+        yield [start, (sx, sy, z), (ex, sy, z), (ex, ey, z), end]
+        yield [start, (sx, sy, z), (sx, ey, z), (ex, ey, z), end]
+    floor = max(sz, ez)
+    top = max(upper[2], floor)
+    for i in range(1, heights + 1):
+        z = floor + (top - floor) * i / heights
+        yield [start, (sx, sy, z), (ex, ey, z), end]
+
+
+def plan_safe_path(
+    start: Vec3, end: Vec3, free: SegmentCheck, upper: Vec3, *, heights: int = 4
+) -> list[Vec3] | None:
+    """Find a collision-free path from ``start`` to ``end``, or ``None`` if none is found.
+
+    ``free(a, b)`` says whether the straight move ``a`` to ``b`` is free (for the digital twin
+    :meth:`~pyippdme.twin.twin.DigitalTwin.segment_is_free`). The candidates of
+    :func:`safe_path_candidates` are tried in order; the first whose segments are all free wins,
+    with repeated points removed.
+    """
+    for candidate in safe_path_candidates(start, end, upper, heights=heights):
+        path = [candidate[0]]
+        for point in candidate[1:]:
+            if math.dist(point, path[-1]) > 1e-9:
+                path.append(point)
+        if all(free(a, b) for a, b in itertools.pairwise(path)):
+            return path
+    return None

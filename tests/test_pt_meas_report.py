@@ -54,7 +54,9 @@ async def test_on_pt_meas_report_accepts_r(started_client: IppDmeClient) -> None
         Number.of(0.0),
     )
     await started_client.call(CommandName.ON_PT_MEAS_REPORT, NamedValue(ParameterName.R, ()))
-    (data,) = await started_client.call(CommandName.PT_MEAS)
+    (data,) = await started_client.call(
+        CommandName.PT_MEAS, NamedValue("X", (Number.of(0),)), NamedValue("Y", (Number.of(0),))
+    )
     (value,) = _items(data).values
     assert value.name == "R"
     assert _num(value) == pytest.approx(90.0)

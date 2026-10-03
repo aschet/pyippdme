@@ -114,3 +114,27 @@ def test_tool_spec_is_editable_data_with_validation() -> None:
         "camera",
     }
     assert PRESETS["bridge-700"].accuracy.sigma_mm(300.0) < 0.001
+
+
+def test_a_safe_path_goes_around_a_box() -> None:
+    from pyippdme.twin.planning import plan_safe_path
+
+    # An obstacle: the box x 40..60, y 0..100, z 0..50 blocks everything low between x = 0 and 100.
+    def free(a: tuple[float, float, float], b: tuple[float, float, float]) -> bool:
+        for i in range(101):
+            t = i / 100
+            p = [a[k] + (b[k] - a[k]) * t for k in range(3)]
+            if 40 <= p[0] <= 60 and 0 <= p[1] <= 100 and 0 <= p[2] <= 50:
+                return False
+        return True
+
+    upper = (200.0, 200.0, 200.0)
+    assert plan_safe_path((0, 50, 10), (100, 50, 10), free, upper) is not None
+    path = plan_safe_path((0, 50, 10), (100, 50, 10), free, upper)
+    assert path is not None
+    assert max(p[2] for p in path) > 50  # over the top, the only way around in y = 0..100
+    assert plan_safe_path((0, 150, 10), (100, 150, 10), free, upper) == [
+        (0, 150, 10),
+        (100, 150, 10),
+    ]  # direct when nothing is in the way
+    assert plan_safe_path((0, 50, 10), (100, 50, 10), lambda a, b: False, upper) is None
