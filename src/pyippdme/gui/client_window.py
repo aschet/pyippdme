@@ -605,7 +605,9 @@ class ClientWindow(QMainWindow):
         key = (batch_id, index)
         if isinstance(event, Received):
             self._on_data(key, text, event.payload, status)
-        if status and not isinstance(event, Failed | ConnectionLost):
+        if status and not isinstance(event, ConnectionLost):
+            # A poll that fails (the server waits for ClearAllErrors) says nothing new: the error
+            # of the command that caused it is already in the log and the status bar.
             return
         batch = self._batches.get(batch_id)
         number = ""
