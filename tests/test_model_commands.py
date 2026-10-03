@@ -285,3 +285,52 @@ def test_unpack_samples_rejects_bad_input() -> None:
         unpack_samples(b"", "triple")
     with pytest.raises(ValueError, match="multiple of 3"):
         unpack_samples(b"\x00" * 16, "double")
+
+
+# -- Tool and FoundTool properties ---------------------------------------------
+
+
+async def test_tool_properties(machine: IppDmeMachine) -> None:
+    assert await machine.tool.get_name() == "RefTool"
+    assert await machine.tool.get_collection() == DEFAULT_TOOL_COLLECTION
+    assert await machine.tool.get_last_qualified() == "00000000T000000Z"
+    tool_id = await machine.tool.get_id()
+    assert tool_id.id == "RefTool"
+    with pytest.raises(IppDmeServerError):
+        await machine.tool.get_alignment()  # the default tool is not alignable
+
+
+async def test_alignment_property_of_an_alignable_tool(machine: IppDmeMachine) -> None:
+    await machine.tool_changer.change_tool("AlignProbe")
+    await machine.tool.align_tool((0, 0, 1), 0.0)
+    assert await machine.tool.get_alignment() == pytest.approx((0.0, 0.0, 1.0))
+    await machine.tool.re_qualify()
+    assert await machine.tool.get_last_qualified() != "00000000T000000Z"
+
+
+async def test_found_tool_properties(machine: IppDmeMachine) -> None:
+    assert await machine.found_tool.get_name() == "NoTool"
+    await machine.tool_changer.find_tool("RefTool2")
+    assert await machine.found_tool.get_name() == "RefTool2"
+    assert await machine.found_tool.get_collection() == DEFAULT_TOOL_COLLECTION
+    assert (await machine.found_tool.get_id()).id == "RefTool2"
+    assert await machine.found_tool.get_last_qualified() == "00000000T000000Z"
+
+
+# -- Values with several numbers ---------------------------------------------
+
+
+async def test_pt_meas_returns_the_probing_direction_when_it_is_reported(
+    machine: IppDmeMachine,
+) -> None:
+    await machine.cart_cmm.on_pt_meas_report("X", "Y", "Z", "IJK")
+    report = await machine.cart_cmm.pt_meas(1, 2, 3, ijk=(0, 0, 1))
+    assert report.number("Z") == 3.0
+    assert len(report.vector("IJK")) == 3
+
+
+async def test_scans_can_report_more_than_the_position(machine: IppDmeMachine) -> None:
+    scan = machine.scanning.reporting("X", "Y", "Z", "IJK")
+    points = [p async for p in scan.scan_on_line((0, 0, 0), (4, 0, 0), (0, 0, 1), 2.0)]
+    assert [p.number("X") for p in points] == [0.0, 2.0, 4.0]
+    assert all(p.vector("IJK") == (0.0, 0.0, 1.0) for p in points)

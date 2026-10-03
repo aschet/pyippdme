@@ -167,7 +167,7 @@ async def _data_acquire(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
         raise bad_argument(CommandName.DATA_ACQUIRE, "n must not be negative")
 
     remaining = args[4:]
-    vector_count = 6 * n
+    vector_count = 9 * n
     if len(remaining) not in (vector_count, vector_count + 1, vector_count + 2):
         raise bad_argument(
             CommandName.DATA_ACQUIRE, "Wrong number of position/orientation arguments"
@@ -183,7 +183,7 @@ async def _data_acquire(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
         positions = []
         directions = []
         for i in range(n):
-            base = i * 6
+            base = i * 9
             positions.append((numbers[base], numbers[base + 1], numbers[base + 2]))
             directions.append((numbers[base + 3], numbers[base + 4], numbers[base + 5]))
 

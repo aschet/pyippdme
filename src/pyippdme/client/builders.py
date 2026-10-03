@@ -47,7 +47,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from pyippdme.protocol.ast import Argument, BasicName, NamedValue, Number
+from pyippdme.protocol.ast import Argument, BasicName, NamedValue, Number, String
 from pyippdme.protocol.parameters import ParameterName
 from pyippdme.types.csy import CoordinateTransform
 from pyippdme.types.vec3 import Vec3
@@ -63,25 +63,119 @@ def named_numbers(*named: tuple[str, float | None]) -> tuple[Argument, ...]:
     return tuple(NamedValue(n, (Number.of(v),)) for n, v in named if v is not None)
 
 
+@dataclass(frozen=True, slots=True)
+class ToolAlignment:
+    """A tool orientation: the primary direction and, optionally, the secondary one (6.20)."""
+
+    primary: Vec3
+    secondary: Vec3 | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PartAlignment:
+    """The rotary-table orientation ``AlignPart`` asks for (6.23.1).
+
+    ``second_part_vector``, ``second_machine_vector`` and ``beta`` are for a
+    second rotary table, orthogonal to the first.
+    """
+
+    part_vector: Vec3
+    machine_vector: Vec3
+    alpha: float
+    second_part_vector: Vec3 | None = None
+    second_machine_vector: Vec3 | None = None
+    beta: float | None = None
+
+    def __post_init__(self) -> None:
+        second = (self.second_part_vector, self.second_machine_vector, self.beta)
+        if any(item is None for item in second) and any(item is not None for item in second):
+            raise ValueError(
+                "second_part_vector, second_machine_vector and beta must be given together"
+            )
+
+
+def _motion(
+    x: float | None,
+    y: float | None,
+    z: float | None,
+    ijk: Vec3 | None,
+    r: float | None,
+    a: float | None,
+    b: float | None,
+    c: float | None,
+    alignment: ToolAlignment | None,
+    align_part: PartAlignment | None,
+    sync: bool | None,
+) -> tuple[Argument, ...]:
+    arguments = list(
+        named_numbers(
+            (ParameterName.X, x),
+            (ParameterName.Y, y),
+            (ParameterName.Z, z),
+        )
+    )
+    if ijk is not None:
+        arguments.append(vector(ParameterName.IJK, ijk))
+    arguments.extend(
+        named_numbers(("R", r), ("Tool.A", a), ("Tool.B", b), ("Tool.C", c)),
+    )
+    if alignment is not None:
+        arguments.append(
+            NamedValue("Tool.Alignment", _flat(alignment.primary, alignment.secondary))
+        )
+    if align_part is not None:
+        arguments.append(NamedValue("AlignPart", _align_part_numbers(align_part)))
+    if sync is not None:
+        arguments.append(NamedValue("Sync", (Number.of(1 if sync else 0),)))
+    return tuple(arguments)
+
+
 def go_to(
-    x: float | None = None, y: float | None = None, z: float | None = None
+    x: float | None = None,
+    y: float | None = None,
+    z: float | None = None,
+    *,
+    r: float | None = None,
+    a: float | None = None,
+    b: float | None = None,
+    c: float | None = None,
+    alignment: ToolAlignment | None = None,
+    sync: bool | None = None,
 ) -> tuple[Argument, ...]:
     """Build ``GoTo``'s argument list, e.g. ``go_to(x=10, y=20)`` -> ``(X(10), Y(20))``."""
-    return named_numbers((ParameterName.X, x), (ParameterName.Y, y), (ParameterName.Z, z))
+    return _motion(x, y, z, None, r, a, b, c, alignment, None, sync)
 
 
 def step(
-    x: float | None = None, y: float | None = None, z: float | None = None
+    x: float | None = None,
+    y: float | None = None,
+    z: float | None = None,
+    *,
+    r: float | None = None,
+    a: float | None = None,
+    b: float | None = None,
+    c: float | None = None,
+    sync: bool | None = None,
 ) -> tuple[Argument, ...]:
     """Build ``Step``'s argument list (6.8.1's relative move)."""
-    return named_numbers((ParameterName.X, x), (ParameterName.Y, y), (ParameterName.Z, z))
+    return _motion(x, y, z, None, r, a, b, c, None, None, sync)
 
 
 def pt_meas(
-    x: float | None = None, y: float | None = None, z: float | None = None
+    x: float | None = None,
+    y: float | None = None,
+    z: float | None = None,
+    *,
+    ijk: Vec3 | None = None,
+    r: float | None = None,
+    a: float | None = None,
+    b: float | None = None,
+    c: float | None = None,
+    alignment: ToolAlignment | None = None,
+    align_part: PartAlignment | None = None,
 ) -> tuple[Argument, ...]:
     """Build ``PtMeas``'s argument list."""
-    return named_numbers((ParameterName.X, x), (ParameterName.Y, y), (ParameterName.Z, z))
+    return _motion(x, y, z, ijk, r, a, b, c, alignment, align_part, None)
 
 
 def get(*axes: str) -> tuple[Argument, ...]:
@@ -124,9 +218,13 @@ def get_prop(*names: str) -> tuple[Argument, ...]:
     return bare_names(*names)
 
 
-def set_prop(name: str, value: float) -> tuple[Argument, ...]:
-    """Build ``SetProp``'s argument list for a single numeric property."""
-    return (NamedValue(name, (Number.of(value),)),)
+def set_prop(name: str, value: float | str | Sequence[float]) -> tuple[Argument, ...]:
+    """Build ``SetProp``'s argument for one property: a number, a string or several numbers."""
+    if isinstance(value, str):
+        return (NamedValue(name, (String(value),)),)
+    if isinstance(value, int | float):
+        return (NamedValue(name, (Number.of(value),)),)
+    return (NamedValue(name, tuple(Number.of(v) for v in value)),)
 
 
 def set_scale_temperatures(**temperatures: float) -> tuple[Argument, ...]:
@@ -184,42 +282,73 @@ def set_csy_transformation(transform: CoordinateTransform) -> tuple[Argument, ..
 
 @dataclass(frozen=True, slots=True)
 class CurvePoint:
-    """One nominal point of a ``ScanOnCurve`` (6.13.2's mandatory ``Format`` columns only).
+    """One nominal point of a ``ScanOnCurve`` (Table 85).
 
-    See :mod:`pyippdme.simulation.classes.scanning_class`'s module docstring for the
-    optional tool-alignment/rotary-table columns this does not cover.
     ``tag`` is ``+1`` (on the part surface) or ``-1`` (no contact expected).
+    ``primary`` and ``secondary`` are the nominal tool directions at the point
+    (see ``AlignTool``; ``secondary`` needs ``primary``) and ``rotary`` is the
+    rotary-table angle. Every point of one scan must give the same optional
+    columns.
     """
 
     position: Vec3
     normal: Vec3
     tag: int
+    primary: Vec3 | None = None
+    secondary: Vec3 | None = None
+    rotary: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.secondary is not None and self.primary is None:
+            raise ValueError("secondary needs primary")
 
 
-def scan_on_curve(points: Sequence[CurvePoint], *, closed: bool = False) -> tuple[Argument, ...]:
-    """Build ``ScanOnCurve``'s argument list from a sequence of nominal points.
-
-    See :mod:`pyippdme.simulation.classes.scanning_class`'s module docstring for the
-    confirmed wire encoding this reproduces (fixed ``Format``, flattened
-    ``Data``).
-    """
-    format_arg = NamedValue(
-        ParameterName.FORMAT,
-        (
-            NamedValue(ParameterName.X, ()),
-            NamedValue(ParameterName.Y, ()),
-            NamedValue(ParameterName.Z, ()),
-            NamedValue(ParameterName.IJK, ()),
-            BasicName(ParameterName.TAG),
-        ),
-    )
-    data_numbers = [v for p in points for v in (*p.position, *p.normal, float(p.tag))]
-    data_arg = NamedValue(ParameterName.DATA, tuple(Number.of(v) for v in data_numbers))
-    return (
+def scan_on_curve(
+    points: Sequence[CurvePoint],
+    *,
+    closed: bool = False,
+    rotary_table: bool | None = None,
+) -> tuple[Argument, ...]:
+    """Build ``ScanOnCurve``'s argument list from a sequence of nominal points."""
+    columns = {
+        (p.primary is not None, p.secondary is not None, p.rotary is not None) for p in points
+    }
+    if len(columns) > 1:
+        raise ValueError("Every curve point must give the same optional columns")
+    with_primary, with_secondary, with_rotary = columns.pop() if columns else (False,) * 3
+    format_items: list[Argument] = [
+        NamedValue(ParameterName.X, ()),
+        NamedValue(ParameterName.Y, ()),
+        NamedValue(ParameterName.Z, ()),
+        NamedValue(ParameterName.IJK, ()),
+        BasicName(ParameterName.TAG),
+    ]
+    if with_primary:
+        format_items.extend(BasicName(name) for name in ("pi", "pj", "pk"))
+    if with_secondary:
+        format_items.extend(BasicName(name) for name in ("si", "sj", "sk"))
+    if with_rotary:
+        format_items.append(NamedValue("R", ()))
+    data_numbers = [
+        v
+        for p in points
+        for v in (
+            *p.position,
+            *p.normal,
+            float(p.tag),
+            *(p.primary or ()),
+            *(p.secondary or ()),
+            *(() if p.rotary is None else (p.rotary,)),
+        )
+    ]
+    arguments: list[Argument] = [
         NamedValue(ParameterName.CLOSED, (Number.of(1 if closed else 0),)),
-        format_arg,
-        data_arg,
-    )
+        NamedValue(ParameterName.FORMAT, tuple(format_items)),
+    ]
+    if rotary_table is not None:
+        arguments.append(NamedValue("RT", (Number.of(1 if rotary_table else 0),)))
+    arguments.append(NamedValue(ParameterName.DATA, tuple(Number.of(v) for v in data_numbers)))
+    return tuple(arguments)
 
 
 def _positional(*values: float | bool | None) -> tuple[Argument, ...]:
@@ -326,3 +455,57 @@ def density(
 def positional(*parts: float | bool | Vec3 | None) -> tuple[Argument, ...]:
     """Build bare positional numbers, flattening vectors, for the fixed-order scan commands."""
     return _flat(*parts)
+
+
+def _align_part_numbers(alignment: PartAlignment) -> tuple[Argument, ...]:
+    return _flat(
+        alignment.part_vector,
+        alignment.machine_vector,
+        alignment.second_part_vector,
+        alignment.second_machine_vector,
+        alignment.alpha,
+        alignment.beta,
+    )
+
+
+def align_part(alignment: PartAlignment) -> tuple[Argument, ...]:
+    """Build ``AlignPart``'s positional arguments."""
+    return _align_part_numbers(alignment)
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionPoint:
+    """One position of a ``DataAcquire`` path (Table 95).
+
+    ``primary`` is the vector anti-parallel to the tool's main axis and
+    ``secondary`` the one describing the orientation within the working plane
+    (see ``AlignTool``).
+    """
+
+    position: Vec3
+    primary: Vec3
+    secondary: Vec3
+
+
+def data_acquire(
+    acq_name: str,
+    acquisition_type: str,
+    settings_name: str,
+    points: Sequence[AcquisitionPoint] = (),
+    *,
+    step_width: float | None = None,
+    rotary_table: bool | None = None,
+) -> tuple[Argument, ...]:
+    """Build ``DataAcquire``'s positional arguments."""
+    numbers = [v for p in points for v in (*p.position, *p.primary, *p.secondary)]
+    tail = _positional(step_width, rotary_table)
+    if rotary_table is not None and step_width is None:
+        raise ValueError("rotary_table needs step_width")
+    return (
+        String(acq_name),
+        BasicName(acquisition_type),
+        String(settings_name),
+        Number.of(len(points)),
+        *(Number.of(v) for v in numbers),
+        *tail,
+    )

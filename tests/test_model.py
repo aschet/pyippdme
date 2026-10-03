@@ -10,7 +10,7 @@ import pytest
 
 from pyippdme import IppDmeMachine
 from pyippdme.client import IppDmeClient
-from pyippdme.client.model import CurvePoint
+from pyippdme.client.model import AcquisitionPoint, CurvePoint
 from pyippdme.exceptions import IppDmeServerError
 from pyippdme.types.csy import CoordinateTransform
 
@@ -193,8 +193,8 @@ async def test_raw_data_acquire_with_a_sweep_scan_path(machine: IppDmeMachine) -
         "Sweep",
         "Settings1",
         points=[
-            ((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
-            ((10.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+            AcquisitionPoint((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (1.0, 0.0, 0.0)),
+            AcquisitionPoint((10.0, 0.0, 0.0), (0.0, 0.0, 1.0), (1.0, 0.0, 0.0)),
         ],
     )
     _name, _offset, size = await machine.raw_data.get_raw_data_sha_mem("Sweep1")

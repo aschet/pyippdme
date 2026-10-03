@@ -81,9 +81,9 @@ user and this layer's own typed methods build requests identically.
 
 `IppDmeMachine` wraps the same connection with typed methods and return
 values instead, grouped the way VDMA 8722's own object model groups them
-(`.server`, `.dme`, `.cart_cmm`, `.tool`, `.tool_changer`, `.scanning`,
-`.form_tester`, `.mover`, `.rotary_table`, `.part`, `.raw_data`) - see
-`pyippdme.client.model` for what each namespace covers:
+(`.server`, `.dme`, `.cart_cmm`, `.tool`, `.found_tool`, `.tool_changer`, `.scanning`,
+`.form_tester`, `.mover`, `.rotary_table`, `.part`, `.raw_data`, `.feature_extraction`)
+- see `pyippdme.client.model` for what each namespace covers:
 
 ```python
 import asyncio
@@ -107,9 +107,31 @@ asyncio.run(main())
 Anything `IppDmeMachine` doesn't wrap is still reachable via
 `machine.client.call(...)` directly.
 
-The namespaces cover every command that `VirtualCMM` implements. For example
-`machine.server` has the session, error and property commands, including
-`clear_all_errors()`.
+The namespaces cover the commands and properties of VDMA 8722, including the
+deprecated `FeatureExtraction` class. For example `machine.server` has the
+session, error and property commands, including `clear_all_errors()`.
+
+Moves and measurements take everything the standard allows as arguments:
+
+```python
+from pyippdme.client.model import ToolAlignment
+
+await machine.cart_cmm.go_to(x=10, r=90, alignment=ToolAlignment((0, 0, 1)), sync=True)
+report = await machine.cart_cmm.pt_meas(x=1, y=2, z=3, ijk=(0, 0, 1))
+```
+
+A response made of named values, such as the result of `pt_meas()` or `get()`,
+is a `Report`: a single number is a `float` and several numbers are a tuple.
+`report.number("X")` and `report.vector("IJK")` give the typed value.
+
+A scan yields `(x, y, z)` points. To get other values for each point, such as the
+quality or the surface direction, use `machine.scanning.reporting(...)`:
+
+```python
+scan = machine.scanning.reporting("X", "Y", "Z", "Q", "IJK")
+async for point in scan.scan_on_line((0, 0, 0), (10, 0, 0), (0, 0, 1), step_width=2.0):
+    print(point.number("Q"), point.vector("IJK"))
+```
 
 Each method sends its command as soon as it is called and returns a handle.
 Awaiting the handle waits until the command is done and gives its typed result.
@@ -118,7 +140,7 @@ You can also check the acknowledgement first:
 ```python
 call = machine.cart_cmm.pt_meas(x=1, y=2, z=3)  # command sent
 await call.acknowledged()                       # the server received it
-position = await call                           # dict[str, float]
+report = await call                             # a Report
 
 scan = machine.scanning.scan_on_line((0, 0, 0), (10, 0, 0), (0, 0, 1), step_width=2.0)
 await scan.acknowledged()

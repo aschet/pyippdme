@@ -173,6 +173,10 @@ class CommandName(StrEnum):
     GET_RAW_DATA_FILE = "GetRawDataFile"
     DEL_RAW_DATA_FILE = "DelRawDataFile"
 
+    # FeatureExtraction (Annex J.2, deprecated).
+    ROI = "ROI"
+    FEATURE_EXTRACT = "FeatureExtract"
+
     # Part (6.24) has no commands of its own, only properties (Temperature,
     # XpanCoefficient, Approach, Search, Retract - reached through SetProp/
     # GetProp above, see pyippdme.simulation.classes.part_class), so it adds no members.

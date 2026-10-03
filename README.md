@@ -24,7 +24,7 @@ Implemented so far:
   execution and `AbortE()`, error handling.
 - Client: `IppDmeClient`, a low-level client mirroring the wire protocol, and
   `IppDmeMachine`, a typed interface organized like the standard's object
-  model that covers every command the simulation implements.
+  model.
 - Server: `IppDmeServer`, a server you extend with your own command classes
   and machine backend.
 - Simulation: `VirtualCMM`, a simulated CMM to develop and test clients
@@ -40,8 +40,9 @@ Implemented so far:
 - CLI and TUI: `ippdme client`, `ippdme serve`, `ippdme spy` and a
   full-screen `ippdme tui`.
 
-Not implemented: the deprecated parts of the standard, a second orthogonal
-rotary table, and the optional tool-alignment columns of `ScanOnCurve`.
+Not implemented by the simulation: the deprecated `FeatureExtraction` class,
+a second orthogonal rotary table, and the optional tool-direction and
+rotary-table columns of `ScanOnCurve`.
 
 ## Installation
 

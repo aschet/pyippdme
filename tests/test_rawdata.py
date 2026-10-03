@@ -56,7 +56,7 @@ async def _acquire_points(
     acquisition_type: str,
     positions: list[tuple[float, float, float]],
 ) -> None:
-    numbers = [v for x, y, z in positions for v in (x, y, z, 0.0, 0.0, 1.0)]
+    numbers = [v for x, y, z in positions for v in (x, y, z, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0)]
     await client.call(
         CommandName.DATA_ACQUIRE,
         String(name),
