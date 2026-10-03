@@ -443,12 +443,12 @@ Where this package departs from VDMA 8722:2024-04, or has to guess:
   error 2002 ("Type of probe does not allow this operation") never occurs.
 - `VirtualCMM` stores coordinate system transformations and only re-expresses its position
   when the active CSY changes; the twin applies the whole chain (Figure 12) to every
-  coordinate. The chain order and the Euler angle convention follow Figure 12 and the formula
-  of 4.1.3 as supplied by the maintainer; the text of the standard was not available.
+  coordinate. The chain order follows Figure 12, which the extracted text of the standard does not
+  contain and the maintainer supplied; the Euler angle convention follows 6.5.1.
 - `Tool.AlignmentVolume` is answered as `SPH` and four numbers (Table 118), `Tool.CollisionVolume`
   as `OBB` and 15 numbers (Table 117). The extension `E` of a box is taken as the half-length
   along each axis, which Table 117 does not say. Tool collections are listed with the kinds
-  `Collection` and `Tool`, and paths use `/`; the standard gives no wire examples for them.
+  `Collection` and `Tool` (Table 125), and paths join node names with `.` as in `PartXYZ.Rear`.
 - `Tool.A()`, `B()` and `C()` are valid only inside `Get`; written as commands they are
   answered with 0508 (Table 113). `OnReport` is not implemented.
 - `GetXtdErrStatus()` reports active errors as `ActiveError()` and `Severity()` data

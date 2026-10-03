@@ -30,12 +30,11 @@ from the commanded point to wherever the machine was just before this
 prior motion to infer one from, e.g. the very first ``PtMeas`` of a
 session) falls back the same way, since the spec's own fallback rule has
 nothing to fall back to there either. The approach position is offset from
-the commanded point by ``Part.Approach() + Tool.PtMeasPar.Approach()``
-along that direction (``Tool.AvrRadius()`` is assumed zero, per the spec's
-own drawing note); the search then runs from there back past the commanded
-point by ``Tool.PtMeasPar.Search()``, and the first surface contact within
-that range is the measured point - reported instead of the commanded one -
-or ``1006 Surface not found`` if the surface never comes into range.
+the commanded point by ``Part.Approach() + Tool.PtMeasPar.Approach() + Tool.AvrRadius()``
+along that direction (the radius is zero unless the tool handler reports one); the search then
+runs from there back past the commanded point by ``Tool.PtMeasPar.Search() + Part.Search()``,
+and the first surface contact within that range is the measured point - reported instead of
+the commanded one - or ``1006 Surface not found`` if the surface never comes into range.
 ``Tool.PtMeasPar.Retract()`` then moves the machine's *resting* position
 (what later ``Get``/``GoTo`` see) away from the contact point, per 6.12.1's
 own sign convention, without changing what was already reported as
@@ -105,6 +104,7 @@ from pyippdme.simulation.classes.tool_class import (
     apply_tool_orientation,
     require_measuring_tool,
     tool_alignment_numbers,
+    tool_avr_radius,
     tool_axis_value,
 )
 from pyippdme.simulation.context import Ctx, csy_context
@@ -741,7 +741,11 @@ async def _probe_with_motion(ctx: Ctx, motion: _Motion, nominal: Vec3, unit: Vec
     fail with ``1006``.
     """
     parameters = ctx.state.tool.parameters.pt_meas_par
-    approach = ctx.state.part.properties.get("Part.Approach", 0.0) + parameters["Approach"].value
+    approach = (
+        ctx.state.part.properties.get("Part.Approach", 0.0)
+        + parameters["Approach"].value
+        + tool_avr_radius(ctx)
+    )
     await _move(ctx, motion, CommandName.PT_MEAS, relative=False, end_offset=scale(unit, approach))
     assert ctx.motion is not None  # noqa: S101 (checked by the caller)
     result = await ctx.motion.probe(
@@ -750,7 +754,7 @@ async def _probe_with_motion(ctx: Ctx, motion: _Motion, nominal: Vec3, unit: Vec
             nominal=nominal,
             direction=unit,
             approach=approach,
-            search=parameters["Search"].value,
+            search=parameters["Search"].value + ctx.state.part.properties.get("Part.Search", 0.0),
             retract=parameters["Retract"].value,
             speed=parameters["Speed"].value,
             accel=parameters["Accel"].value,
@@ -812,9 +816,11 @@ def _probe_surface(
     approach_distance = (
         ctx.state.part.properties.get("Part.Approach", 0.0)
         + ctx.state.tool.parameters.pt_meas_par["Approach"].value
-        # Tool.AvrRadius() is assumed zero (6.12.1's own drawing note).
+        + tool_avr_radius(ctx)
     )
-    search_distance = ctx.state.tool.parameters.pt_meas_par["Search"].value
+    search_distance = ctx.state.tool.parameters.pt_meas_par["Search"].value + (
+        ctx.state.part.properties.get("Part.Search", 0.0)
+    )
     retract_distance = ctx.state.tool.parameters.pt_meas_par["Retract"].value
 
     approach_position = add(nominal_position, scale(unit, approach_distance))

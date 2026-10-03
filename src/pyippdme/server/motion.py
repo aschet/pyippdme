@@ -50,9 +50,11 @@ class ProbeRequest:
     """The probing cycle of ``PtMeas`` (6.12.1) from the approach position.
 
     The machine stands at ``nominal + direction * approach``; ``direction`` points from the
-    surface towards the probe. It searches towards the surface for up to
-    ``approach + search``, and retracts by ``retract`` (negative: back to the approach
-    position) after the trigger.
+    surface towards the probe. ``approach`` is ``Part.Approach + Tool.Approach + AvrRadius``
+    (6.12.1): for a tool with a ball the tool centre point starts one radius further out. The
+    search goes on until ``search`` beyond the nominal point, measured at the tip (so a ball
+    centre travels ``approach - radius + search``), and the machine retracts by ``retract``
+    (negative: back to the approach position) after the trigger.
     """
 
     cause: str
@@ -137,6 +139,18 @@ class OffsetProvider(Protocol):
     """
 
     def avr_offsets(self, tool_name: str) -> Vec3 | None: ...
+
+
+@runtime_checkable
+class RadiusProvider(Protocol):
+    """Optional part of a :class:`ToolHandler`: the average tip radius (``AvrRadius``, Table 106).
+
+    The approach position of ``PtMeas`` lies ``Part.Approach + Tool.Approach + AvrRadius`` from the
+    nominal point (6.12.1), so a tool with a ball reports its radius here. Without it the radius
+    is zero, as for optical tools.
+    """
+
+    def avr_radius(self, tool_name: str) -> float: ...
 
 
 @runtime_checkable

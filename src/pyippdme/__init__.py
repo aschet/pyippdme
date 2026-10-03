@@ -36,6 +36,7 @@ from pyippdme.server.motion import (
     OffsetProvider,
     ProbeRequest,
     ProbeResult,
+    RadiusProvider,
     ToolHandler,
 )
 from pyippdme.server.registry import (
@@ -91,6 +92,7 @@ __all__ = [
     "PlaneSurface",
     "ProbeRequest",
     "ProbeResult",
+    "RadiusProvider",
     "RawSensor",
     "SampleSurface",
     "ServerError",

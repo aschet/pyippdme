@@ -181,6 +181,9 @@ class TwinToolHandler:
     def is_calibrated(self, tool_name: str) -> bool:
         return self._twin.is_calibrated(tool_name)
 
+    def avr_radius(self, tool_name: str) -> float:
+        return self._twin.avr_radius(tool_name)
+
     def avr_offsets(self, tool_name: str) -> Vec3 | None:
         return self._twin.avr_offsets(tool_name)
 
@@ -649,6 +652,11 @@ class DigitalTwin:
             or any(q[0] == name for q in self.qualified)
         )
 
+    def avr_radius(self, name: str) -> float:
+        """Return the radius of the stylus ball; zero for optical tools (``AvrRadius``)."""
+        spec = self.toolkit.spec(name)
+        return 0.0 if spec.mode in OPTICAL_MODES or spec.mode == "none" else spec.ball_radius
+
     def avr_offsets(self, name: str) -> Vec3:
         """Return the tool centre point relative to the head pivot (``Tool.AvrOffsets``)."""
         return tip_offset(self.toolkit.spec(name))
@@ -1034,8 +1042,8 @@ class DigitalTwin:
             1.0 if spec.touch_speed else self.speed_override
         )
         accel = max(request.accel, 1e-3)
-        reach = request.approach + request.search
         radius = spec.ball_radius
+        reach = request.approach - radius + request.search
         hit = self.cast(start, toward)
         trigger = None
         if hit is not None:

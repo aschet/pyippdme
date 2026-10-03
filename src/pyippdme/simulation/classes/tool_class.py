@@ -76,7 +76,7 @@ from pyippdme.protocol.errors import ErrorCode, ErrorSeverity, ServerError
 from pyippdme.protocol.signature import DataType, Parameter
 from pyippdme.server import builders
 from pyippdme.server._util import bad_argument
-from pyippdme.server.motion import CalibrationAware, OffsetProvider
+from pyippdme.server.motion import CalibrationAware, OffsetProvider, RadiusProvider
 from pyippdme.server.registry import CommandHandler, CommandRegistry, HandlerResult, PropertyKind
 from pyippdme.server.tool import PARAMETER_FIELDS, ParameterField, ToolParameter, ToolParameters
 from pyippdme.simulation.context import Ctx, csy_context
@@ -721,11 +721,20 @@ async def _align_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     return NumericData(tuple(Number.of(c) for c in (*primary, *(secondary or ()))))
 
 
-async def _avr_radius(_ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
-    # 6.20.1's own remark: zero "in all other cases" than a sphere/cylinder
-    # tip qualified with an effective-tool-radius algorithm - this
-    # simulation has no such qualification, so always zero.
-    return builders.named_numbers(AvrRadius=0.0)
+def tool_avr_radius(ctx: Ctx) -> float:
+    """Return the average tip radius of the active tool (``AvrRadius``, Table 106).
+
+    Zero unless the tool handler reports a radius (a sphere or cylinder tip): "in all other
+    cases" the server returns zero.
+    """
+    handler = ctx.tool_handler
+    if isinstance(handler, RadiusProvider):
+        return handler.avr_radius(ctx.state.tool.active_name)
+    return 0.0
+
+
+async def _avr_radius(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
+    return builders.named_numbers(AvrRadius=tool_avr_radius(ctx))
 
 
 def _resolve_alignment_namespace(arg_name: str, cause: str) -> str:

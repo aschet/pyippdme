@@ -90,6 +90,82 @@ def stop_reached(stop: ContourStop, point: Vec3, start: Vec3) -> bool:
     return norm(radial) <= stop.size / 2.0
 
 
+class StopTracker:
+    """Counts how often the stop element has been reached, as 6.13.2.2 defines it.
+
+    * Sphere: an entry counts when the distance to the centre has a local minimum inside the
+      sphere. If the scan starts inside, it first has to leave.
+    * Plane: a pass through the plane counts, but only after the scan has moved further from
+      the start than the direction point is (``skip``).
+    * Cylinder: an entry into the cylinder counts. If the scan starts inside, it first has to
+      leave.
+
+    Feed every measured point to :meth:`update`.
+    """
+
+    def __init__(self, stop: ContourStop, start: Vec3, skip: float = 0.0, needed: int = 1) -> None:
+        self._stop = stop
+        self._start = start
+        self._skip = skip
+        self._needed = max(needed, 1)
+        self.count = 0
+        self._armed = not self._inside(start)  # started inside: wait until it has left
+        self._counted = False
+        self._previous_distance = math.inf
+        self._last_side = self._signed(start) if stop.kind == "plane" else 0.0
+
+    def _inside(self, point: Vec3) -> bool:
+        stop = self._stop
+        if stop.kind == "plane":
+            return False
+        if stop.kind == "sphere":
+            return norm(sub(point, stop.point)) <= stop.size / 2.0
+        assert stop.direction is not None  # noqa: S101
+        unit = normalize(stop.direction)
+        offset = sub(point, stop.point)
+        return norm(sub(offset, scale(unit, dot(offset, unit)))) <= stop.size / 2.0
+
+    def _signed(self, point: Vec3) -> float:
+        assert self._stop.direction is not None  # noqa: S101
+        return dot(sub(point, self._stop.point), normalize(self._stop.direction))
+
+    def update(self, point: Vec3) -> tuple[bool, bool]:
+        """Take the next measured point; return ``(finished, keep this point)``."""
+        if self._stop.kind == "plane":
+            return self._update_plane(point)
+        if not self._inside(point):
+            self._armed = True
+            self._counted = False
+            self._previous_distance = math.inf
+            return False, True
+        if not self._armed or self._counted:
+            return False, True
+        if self._stop.kind == "cylinder":
+            self._counted = True
+            self.count += 1
+            return self.count >= self._needed, True
+        distance = norm(sub(point, self._stop.point))
+        increasing = distance > self._previous_distance
+        self._previous_distance = distance
+        if not increasing:
+            return False, True
+        # The previous point was the minimum; this one is already moving away from the centre.
+        self._counted = True
+        self.count += 1
+        return self.count >= self._needed, False
+
+    def _update_plane(self, point: Vec3) -> tuple[bool, bool]:
+        side = self._signed(point)
+        # A point exactly on the plane is no pass yet: the next one on the other side is.
+        crossed = side != 0.0 and self._last_side != 0.0 and (side > 0.0) != (self._last_side > 0.0)
+        if side != 0.0:
+            self._last_side = side
+        if crossed and norm(sub(point, self._start)) > self._skip:
+            self.count += 1
+            return self.count >= self._needed, True
+        return False, True
+
+
 def _toward(vector: Vec3, reference: Vec3) -> Vec3:
     return vector if dot(vector, reference) >= 0.0 else scale(vector, -1.0)
 
@@ -162,8 +238,9 @@ def trace_contour(
     if constraint.kind == "cylinder":
         radius = norm(_cylinder_radius_vector(constraint, scan.start))
     point = scan.start
-    reached = 0
-    was_inside = False
+    tracker = StopTracker(
+        scan.stop, scan.start, norm(sub(scan.direction_point, scan.start)), scan.count
+    )
     travelled = 0.0
     for _ in range(max_points):
         hit = probe_surface(add(point, scale(probe, lookahead)), scale(probe, -1.0))
@@ -172,13 +249,11 @@ def trace_contour(
         if hit is None:
             return
         measured, normal = hit
-        yield measured
-        inside = stop_reached(scan.stop, measured, scan.start)
-        if inside and not was_inside:
-            reached += 1
-            if reached >= scan.count:
-                return
-        was_inside = inside
+        done, keep = tracker.update(measured)
+        if keep:
+            yield measured
+        if done:
+            return
         normal = _toward(normalize(normal), probe)
         heading = _next_heading(constraint, measured, normal, heading)
         point = _constrain(constraint, add(measured, scale(heading, scan.step)), radius)

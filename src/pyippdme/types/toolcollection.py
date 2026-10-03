@@ -11,7 +11,8 @@ referenced from any number of collections, under any name, so the same qualified
 ``X-Short`` for the front of one part and ``Y+Long`` for the engine compartment of another. After
 ``OpenToolCollection`` a client names tools by the entries of the opened collection.
 
-Paths join node names with ``/``; the empty path is the root, whose children are level 0.
+Paths join node names with ``.`` as in the standard's examples (``PartXYZ.Rear``); ``/`` is
+accepted when reading a path. The empty path is the root, whose children are level 0.
 Pure Python, no simulation: use it from your own server.
 """
 
@@ -19,8 +20,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-#: Joins the node names of a path.
-SEPARATOR = "/"
+#: Joins the node names of a path (the examples of Tables 125-127 use ``PartXYZ.Rear``).
+SEPARATOR = "."
 #: The kinds an entry is reported with by ``EnumToolCollection``.
 KIND_COLLECTION = "Collection"
 KIND_TOOL = "Tool"
@@ -46,8 +47,8 @@ class CollectionNode:
 
 
 def split_path(path: str) -> list[str]:
-    """Split ``path`` into node names; ``""`` and ``"/"`` are the root."""
-    return [part for part in path.split(SEPARATOR) if part]
+    """Split ``path`` into node names; ``""`` and ``"."`` are the root."""
+    return [part for part in path.replace("/", SEPARATOR).split(SEPARATOR) if part]
 
 
 def find_node(root: CollectionNode, path: str) -> CollectionNode | None:
