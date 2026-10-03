@@ -34,10 +34,12 @@ from dataclasses import dataclass
 from pyippdme.client import IppDmeClient, LineHook, builders
 from pyippdme.client.builders import CurvePoint as CurvePoint
 from pyippdme.client.call import call_handle, stream_handle, unrecorded
+from pyippdme.client.transaction import Transaction
 from pyippdme.protocol.ast import (
     Argument,
     BasicName,
     DataPayload,
+    EventTag,
     Items,
     NamedValue,
     NameValue,
@@ -50,6 +52,7 @@ from pyippdme.protocol.ast import (
 )
 from pyippdme.protocol.commands import CommandName
 from pyippdme.protocol.network import TCP_NETWORK, Network
+from pyippdme.protocol.parameters import ParameterName
 from pyippdme.types.csy import CoordinateTransform
 from pyippdme.types.rawdata import AdvDataStruct
 from pyippdme.types.rawdata import from_xml as adv_data_struct_from_xml
@@ -109,6 +112,16 @@ def _num(nv: NamedValue) -> float:
     return value.value
 
 
+def _property_value(payload: DataPayload) -> float | str:
+    (nv,) = _items(payload)
+    (value,) = nv.args
+    if isinstance(value, Number):
+        return value.value
+    if isinstance(value, String):
+        return value.value
+    raise TypeError(f"Expected a number or string property, got {type(value).__name__}")
+
+
 def _named_numbers(payload: DataPayload) -> dict[str, float]:
     return {nv.name: _num(nv) for nv in _items(payload)}
 
@@ -147,6 +160,70 @@ class Server:
 
     def __init__(self, client: IppDmeClient) -> None:
         self._client = client
+
+    @call_handle
+    async def abort_e(self) -> None:
+        """Abort everything currently executing or queued (5.7)."""
+        await self._client.call(CommandName.ABORT_E)
+
+    @call_handle
+    async def get_prop(self, name: str) -> float | str:
+        """Read one property by its dotted name, e.g. ``"Part.Temperature"`` (6.3.1.1)."""
+        return _property_value(
+            _only(await self._client.call(CommandName.GET_PROP, *builders.get_prop(name)))
+        )
+
+    @call_handle
+    async def get_prop_e(self, name: str) -> float | str:
+        """Like :meth:`get_prop`, but as a prioritized command that bypasses the queue (5.7)."""
+        return _property_value(
+            _only(await self._client.call(CommandName.GET_PROP_E, *builders.get_prop(name)))
+        )
+
+    @call_handle
+    async def set_prop(self, name: str, value: float | str) -> None:
+        """Write one property by its dotted name (6.3.1.1)."""
+        argument = String(value) if isinstance(value, str) else Number.of(value)
+        await self._client.call(CommandName.SET_PROP, NamedValue(name, (argument,)))
+
+    @call_handle
+    async def start_session(self) -> None:
+        await self._client.call(CommandName.START_SESSION)
+
+    @call_handle
+    async def end_session(self) -> None:
+        await self._client.call(CommandName.END_SESSION)
+
+    @call_handle
+    async def clear_all_errors(self) -> None:
+        """Let the server recover from an error (5.6)."""
+        await self._client.call(CommandName.CLEAR_ALL_ERRORS)
+
+    @call_handle
+    async def get_xtd_err_status(self) -> dict[str, float]:
+        """Query the extended error status (6.3.1): all status lines merged by name.
+
+        For example ``{"IsHomed": 1.0}``, plus ``ActiveError`` and ``Severity`` while an
+        error is active.
+        """
+        status: dict[str, float] = {}
+        for payload in await self._client.call(CommandName.GET_XTD_ERR_STATUS):
+            status.update(_named_numbers(payload))
+        return status
+
+    @call_handle
+    async def enum_name_spaces(self) -> tuple[str, ...]:
+        """List the proprietary namespaces the server uses, if any (6.3.1)."""
+        return _string_values(await self._client.call(CommandName.ENUM_NAME_SPACES))
+
+    @call_handle
+    async def stop_daemon(self, event_tag: EventTag) -> None:
+        """Stop the daemon that was started with ``event_tag`` (5.5.2)."""
+        await self._client.stop_daemon(event_tag)
+
+    @call_handle
+    async def stop_all_daemons(self) -> None:
+        await self._client.call(CommandName.STOP_ALL_DAEMONS)
 
     @call_handle
     async def get_error_info(self, error_number: int) -> str:
@@ -257,6 +334,38 @@ class CartCmm:
 
     def __init__(self, client: IppDmeClient) -> None:
         self._client = client
+
+    @call_handle
+    async def on_pt_meas_report(self, *names: str) -> None:
+        """Choose which values ``pt_meas`` reports, e.g. ``"X", "Y", "Z", "IJK"`` (6.12.1)."""
+        await self._client.call(CommandName.ON_PT_MEAS_REPORT, *builders.on_pt_meas_report(*names))
+
+    @call_handle
+    async def pt_meas_self_center(
+        self,
+        x: float | None = None,
+        y: float | None = None,
+        z: float | None = None,
+        ijk: Vec3 | None = None,
+    ) -> dict[str, float]:
+        """Measure a point with self-centering (6.14)."""
+        arguments = builders.pt_meas_self_center(x, y, z, ijk)
+        payload = _only(await self._client.call(CommandName.PT_MEAS_SELF_CENTER, *arguments))
+        return _named_numbers(payload)
+
+    @call_handle
+    async def pt_meas_self_center_locked(
+        self,
+        x: float | None = None,
+        y: float | None = None,
+        z: float | None = None,
+        ijk: Vec3 | None = None,
+        lmn: Vec3 | None = None,
+    ) -> dict[str, float]:
+        """Measure a point with self-centering inside the plane normal to ``lmn`` (6.14)."""
+        arguments = builders.pt_meas_self_center(x, y, z, ijk, lmn)
+        payload = _only(await self._client.call(CommandName.PT_MEAS_SELF_CENTER_LOCKED, *arguments))
+        return _named_numbers(payload)
 
     @call_handle
     async def set_coord_system(self, csy: str) -> None:
@@ -398,6 +507,102 @@ class Tool:
         self._client = client
 
     @call_handle
+    async def re_qualify(self) -> None:
+        """Requalify the active tool (6.10.1)."""
+        await self._client.call(CommandName.RE_QUALIFY)
+
+    @call_handle
+    async def align_tool(
+        self,
+        primary: Vec3,
+        alpha: float,
+        secondary: Vec3 | None = None,
+        beta: float | None = None,
+    ) -> None:
+        """Align the tool (6.20); ``secondary`` and ``beta`` must be given together."""
+        await self._client.call(
+            CommandName.ALIGN_TOOL, *builders.align_tool(primary, alpha, secondary, beta)
+        )
+
+    @call_handle
+    async def use_smallest_angle_to_align_tool(self, flag: bool) -> None:
+        await self._client.call(
+            CommandName.USE_SMALLEST_ANGLE_TO_ALIGN_TOOL, Number.of(1 if flag else 0)
+        )
+
+    @call_handle
+    async def enable_optimize(self) -> None:
+        await self._client.call(CommandName.ENABLE_OPTIMIZE)
+
+    @call_handle
+    async def disable_optimize(self) -> None:
+        await self._client.call(CommandName.DISABLE_OPTIMIZE)
+
+    @call_handle
+    async def is_optimize_enabled(self) -> bool:
+        (value,) = _numeric(_only(await self._client.call(CommandName.IS_OPTIMIZE_ENABLED)))
+        return value != 0.0
+
+    @call_handle
+    async def calc_tool_alignment(
+        self, axis: str = "A", *, namespace: str = "Tool"
+    ) -> tuple[float, ...]:
+        """Calculate the alignment vector(s) for the current tool angles (6.20)."""
+        payload = _only(
+            await self._client.call(
+                CommandName.CALC_TOOL_ALIGNMENT, *builders.alignment_axis(namespace, axis)
+            )
+        )
+        (field,) = _items(payload)
+        numbers = []
+        for value in field.args:
+            if not isinstance(value, Number):
+                raise TypeError(f"Expected numbers, got {type(value).__name__}")
+            numbers.append(value.value)
+        return tuple(numbers)
+
+    @call_handle
+    async def calc_tool_angles(
+        self, primary: Vec3, secondary: Vec3 | None = None, *, namespace: str = "Tool"
+    ) -> dict[str, float]:
+        """Calculate the tool angles (``A``, ``B``, maybe ``C``) for alignment vector(s) (6.20)."""
+        payload = _only(
+            await self._client.call(
+                CommandName.CALC_TOOL_ANGLES,
+                *builders.alignment_vectors(namespace, primary, secondary),
+            )
+        )
+        prefix = f"{namespace}."
+        return {name.removeprefix(prefix): value for name, value in _named_numbers(payload).items()}
+
+    @call_handle
+    async def avr_radius(self) -> float:
+        """Average effective radius of the tool tip (6.20)."""
+        (value,) = _numeric(_only(await self._client.call(CommandName.AVR_RADIUS)))
+        return value
+
+    @call_handle
+    async def avr_offsets(self) -> Vec3:
+        """Average offsets of the tool tip (6.20)."""
+        values = {
+            name.upper(): value
+            for name, value in _named_numbers(
+                _only(await self._client.call(CommandName.AVR_OFFSETS))
+            ).items()
+        }
+        return (values["X"], values["Y"], values["Z"])
+
+    @call_handle
+    async def collision_volume(self) -> tuple[DataPayload, ...]:
+        """Return the tool's collision volume as raw response lines (6.20)."""
+        return await self._client.call(CommandName.COLLISION_VOLUME)
+
+    @call_handle
+    async def alignment_volume(self) -> tuple[DataPayload, ...]:
+        """Return the tool's alignment volume as raw response lines (6.20)."""
+        return await self._client.call(CommandName.ALIGNMENT_VOLUME)
+
+    @call_handle
     async def get_name(self) -> str:
         return _name_value(_only(await self._client.call(CommandName.TOOL)))
 
@@ -442,32 +647,71 @@ class Tool:
 
 
 class Scanning:
-    """A subset of the ``Scanning`` class (6.13.2.1-6.13.2): known-contour scans."""
+    """A subset of the ``Scanning`` class (6.13)."""
 
     def __init__(self, client: IppDmeClient) -> None:
         self._client = client
 
-    @stream_handle
-    async def scan_on_line(
-        self, start: Vec3, end: Vec3, direction: Vec3, step_width: float
-    ) -> AsyncIterator[Vec3]:
-        """Scan a straight line, yielding each measured point as it arrives.
+    async def _scan(self, command: str, arguments: tuple[Argument, ...]) -> AsyncIterator[Vec3]:
+        """Stream a scan's points, reporting ``X``, ``Y``, ``Z`` in that order.
 
-        Each streamed ``ScanOnLine`` response is a *bare* ``NumericData`` -
-        positional values in whatever order ``OnScanReport(...)`` last
-        established (6.13.2), not named fields - so this fixes that order to
-        ``X(), Y(), Z()`` itself, rather than accepting/trusting a
-        previously-set ``OnScanReport`` the caller might have configured
-        differently.
+        Each streamed response is a *bare* ``NumericData``: positional values
+        in whatever order ``OnScanReport(...)`` last established (6.13.2). This
+        fixes that order itself instead of trusting a previously configured one.
         """
         with unrecorded():
             await self._client.call(
                 CommandName.ON_SCAN_REPORT, *builders.on_scan_report("X", "Y", "Z")
             )
-        args = tuple(Number.of(v) for v in (*start, *end, *direction, step_width))
-        async for payload in self._client.call_streaming(CommandName.SCAN_ON_LINE, *args):
+        async for payload in self._client.call_streaming(command, *arguments):
             x, y, z = _numeric(payload)
             yield (x, y, z)
+
+    @stream_handle
+    async def scan_on_line(
+        self, start: Vec3, end: Vec3, direction: Vec3, step_width: float
+    ) -> AsyncIterator[Vec3]:
+        """Scan a straight line, yielding each measured point as it arrives."""
+        arguments = builders.positional(start, end, direction, step_width)
+        async for point in self._scan(CommandName.SCAN_ON_LINE, arguments):
+            yield point
+
+    @stream_handle
+    async def scan_on_circle(
+        self,
+        center: Vec3,
+        start: Vec3,
+        normal: Vec3,
+        delta: float,
+        surface_angle: float,
+        step_width: float,
+        rotary_table: bool | None = None,
+    ) -> AsyncIterator[Vec3]:
+        """Scan a circular arc of ``delta`` degrees around ``center`` (6.13.2.1)."""
+        arguments = builders.scan_on_circle(
+            center, start, normal, delta, surface_angle, step_width, rotary_table
+        )
+        async for point in self._scan(CommandName.SCAN_ON_CIRCLE, arguments):
+            yield point
+
+    @stream_handle
+    async def scan_on_helix(
+        self,
+        center: Vec3,
+        start: Vec3,
+        normal: Vec3,
+        delta: float,
+        surface_angle: float,
+        step_width: float,
+        pitch: float,
+        rotary_table: bool | None = None,
+    ) -> AsyncIterator[Vec3]:
+        """Scan a helix: a circular arc that also rises by ``pitch`` per turn (6.13.2.1)."""
+        arguments = builders.scan_on_circle(
+            center, start, normal, delta, surface_angle, step_width, rotary_table, pitch=pitch
+        )
+        async for point in self._scan(CommandName.SCAN_ON_HELIX, arguments):
+            yield point
 
     @stream_handle
     async def scan_on_curve(
@@ -479,14 +723,202 @@ class Scanning:
         the confirmed wire encoding and this implementation's scope (the
         mandatory position/orientation/tag ``Format`` columns only).
         """
-        with unrecorded():
-            await self._client.call(
-                CommandName.ON_SCAN_REPORT, *builders.on_scan_report("X", "Y", "Z")
-            )
-        args = builders.scan_on_curve(points, closed=closed)
-        async for payload in self._client.call_streaming(CommandName.SCAN_ON_CURVE, *args):
-            x, y, z = _numeric(payload)
-            yield (x, y, z)
+        arguments = builders.scan_on_curve(points, closed=closed)
+        async for point in self._scan(CommandName.SCAN_ON_CURVE, arguments):
+            yield point
+
+    @stream_handle
+    async def scan_in_plane_end_is_sphere(
+        self,
+        start: Vec3,
+        start_ijk: Vec3,
+        plane_normal: Vec3,
+        direction_point: Vec3,
+        step_width: float,
+        end_center: Vec3,
+        diameter: float,
+        n: int,
+        end_ijk: Vec3,
+    ) -> AsyncIterator[Vec3]:
+        """Scan an unknown contour in a plane until ``n`` hits of the end sphere (6.13.2.2)."""
+        arguments = builders.positional(
+            start,
+            start_ijk,
+            plane_normal,
+            direction_point,
+            step_width,
+            end_center,
+            diameter,
+            n,
+            end_ijk,
+        )
+        async for point in self._scan(CommandName.SCAN_IN_PLANE_END_IS_SPHERE, arguments):
+            yield point
+
+    @stream_handle
+    async def scan_in_plane_end_is_plane(
+        self,
+        start: Vec3,
+        start_ijk: Vec3,
+        plane_normal: Vec3,
+        direction_point: Vec3,
+        step_width: float,
+        end_plane_point: Vec3,
+        end_plane_normal: Vec3,
+        n: int,
+        end_ijk: Vec3,
+    ) -> AsyncIterator[Vec3]:
+        """Scan an unknown contour in a plane until ``n`` crossings of the end plane (6.13.2.2)."""
+        arguments = builders.positional(
+            start,
+            start_ijk,
+            plane_normal,
+            direction_point,
+            step_width,
+            end_plane_point,
+            end_plane_normal,
+            n,
+            end_ijk,
+        )
+        async for point in self._scan(CommandName.SCAN_IN_PLANE_END_IS_PLANE, arguments):
+            yield point
+
+    @stream_handle
+    async def scan_in_plane_end_is_cyl(
+        self,
+        start: Vec3,
+        start_ijk: Vec3,
+        plane_normal: Vec3,
+        direction_point: Vec3,
+        step_width: float,
+        axis_point: Vec3,
+        axis_direction: Vec3,
+        diameter: float,
+        n: int,
+        end_ijk: Vec3,
+    ) -> AsyncIterator[Vec3]:
+        """Scan an unknown contour in a plane until ``n`` hits of the end cylinder (6.13.2.2)."""
+        arguments = builders.positional(
+            start,
+            start_ijk,
+            plane_normal,
+            direction_point,
+            step_width,
+            axis_point,
+            axis_direction,
+            diameter,
+            n,
+            end_ijk,
+        )
+        async for point in self._scan(CommandName.SCAN_IN_PLANE_END_IS_CYL, arguments):
+            yield point
+
+    @stream_handle
+    async def scan_in_cyl_end_is_sphere(
+        self,
+        axis_point: Vec3,
+        axis_direction: Vec3,
+        start: Vec3,
+        start_ijk: Vec3,
+        direction_point: Vec3,
+        step_width: float,
+        end_center: Vec3,
+        diameter: float,
+        n: int,
+        end_ijk: Vec3,
+    ) -> AsyncIterator[Vec3]:
+        """Scan an unknown contour on a cylinder until ``n`` hits of the end sphere (6.13.2.2)."""
+        arguments = builders.positional(
+            axis_point,
+            axis_direction,
+            start,
+            start_ijk,
+            direction_point,
+            step_width,
+            end_center,
+            diameter,
+            n,
+            end_ijk,
+        )
+        async for point in self._scan(CommandName.SCAN_IN_CYL_END_IS_SPHERE, arguments):
+            yield point
+
+    @stream_handle
+    async def scan_in_cyl_end_is_plane(
+        self,
+        axis_point: Vec3,
+        axis_direction: Vec3,
+        start: Vec3,
+        start_ijk: Vec3,
+        direction_point: Vec3,
+        step_width: float,
+        end_plane_point: Vec3,
+        end_plane_normal: Vec3,
+        n: int,
+        end_ijk: Vec3,
+    ) -> AsyncIterator[Vec3]:
+        """Scan an unknown contour on a cylinder until ``n`` end-plane crossings (6.13.2.2)."""
+        arguments = builders.positional(
+            axis_point,
+            axis_direction,
+            start,
+            start_ijk,
+            direction_point,
+            step_width,
+            end_plane_point,
+            end_plane_normal,
+            n,
+            end_ijk,
+        )
+        async for point in self._scan(CommandName.SCAN_IN_CYL_END_IS_PLANE, arguments):
+            yield point
+
+    @call_handle
+    async def scan_on_line_hint(self, angle: float, form: float) -> None:
+        await self._client.call(CommandName.SCAN_ON_LINE_HINT, *builders.positional(angle, form))
+
+    @call_handle
+    async def scan_on_circle_hint(self, displacement: float, form: float) -> None:
+        await self._client.call(
+            CommandName.SCAN_ON_CIRCLE_HINT, *builders.positional(displacement, form)
+        )
+
+    @call_handle
+    async def scan_on_curve_hint(self, deviation: float, min_radius_of_curvature: float) -> None:
+        await self._client.call(
+            CommandName.SCAN_ON_CURVE_HINT,
+            *builders.positional(deviation, min_radius_of_curvature),
+        )
+
+    @call_handle
+    async def scan_on_curve_density(
+        self,
+        dis: float | None = None,
+        angle: float | None = None,
+        angle_base_length: float | None = None,
+        at_nominals: bool | None = None,
+    ) -> None:
+        await self._client.call(
+            CommandName.SCAN_ON_CURVE_DENSITY,
+            *builders.density(dis, angle, angle_base_length, at_nominals),
+        )
+
+    @call_handle
+    async def scan_unknown_hint(self, min_radius_of_curvature: float) -> None:
+        await self._client.call(
+            CommandName.SCAN_UNKNOWN_HINT, *builders.positional(min_radius_of_curvature)
+        )
+
+    @call_handle
+    async def scan_unknown_density(
+        self,
+        dis: float | None = None,
+        angle: float | None = None,
+        angle_base_length: float | None = None,
+    ) -> None:
+        await self._client.call(
+            CommandName.SCAN_UNKNOWN_DENSITY, *builders.density(dis, angle, angle_base_length)
+        )
 
 
 class FormTester:
@@ -537,6 +969,32 @@ class Mover:
         self._client = client
 
     @call_handle
+    async def update_scale_temperatures(self) -> None:
+        await self._client.call(CommandName.UPDATE_SCALE_TEMPERATURES)
+
+    @call_handle
+    async def set_temperature_compensation_origin(
+        self, x: float | None = None, y: float | None = None, z: float | None = None
+    ) -> None:
+        await self._client.call(
+            CommandName.SET_TEMPERATURE_COMPENSATION_ORIGIN,
+            *builders.named_numbers(
+                (ParameterName.X, x), (ParameterName.Y, y), (ParameterName.Z, z)
+            ),
+        )
+
+    @call_handle
+    async def on_move_report(
+        self, time: float, dis: float, *axes: str, prioritized: bool = False
+    ) -> Transaction:
+        """Start the move-report daemon (6.7.1); reports arrive via ``Transaction.events()``.
+
+        Stop it with ``machine.server.stop_daemon(transaction.tag)``.
+        """
+        name = CommandName.ON_MOVE_REPORT_E if prioritized else CommandName.ON_MOVE_REPORT
+        return await self._client.start_daemon(name, *builders.on_move_report(time, dis, axes))
+
+    @call_handle
     async def enable_user(self) -> None:
         await self._client.call(CommandName.ENABLE_USER)
 
@@ -579,6 +1037,22 @@ class ToolChanger:
 
     def __init__(self, client: IppDmeClient) -> None:
         self._client = client
+
+    @call_handle
+    async def enum_tool_collection(self, node_name: str) -> tuple[tuple[str, str], ...]:
+        """List the direct children of a tool collection as ``(name, kind)`` pairs (6.22)."""
+        data = await self._client.call(CommandName.ENUM_TOOL_COLLECTION, String(node_name))
+        return _property_pairs(data)
+
+    @call_handle
+    async def enum_all_tool_collections(self, node_name: str) -> tuple[tuple[str, str], ...]:
+        """Like :meth:`enum_tool_collection`, but recursing into sub-collections (6.22)."""
+        data = await self._client.call(CommandName.ENUM_ALL_TOOL_COLLECTIONS, String(node_name))
+        return _property_pairs(data)
+
+    @call_handle
+    async def open_tool_collection(self, node_name: str) -> None:
+        await self._client.call(CommandName.OPEN_TOOL_COLLECTION, String(node_name))
 
     @call_handle
     async def enum_tools(self) -> tuple[str, ...]:
@@ -706,6 +1180,25 @@ class RawDataHandling:
 
     def __init__(self, client: IppDmeClient) -> None:
         self._client = client
+
+    @call_handle
+    async def raw_data_bin_setup(
+        self, data_format: str, port: int, live_mode: bool = False
+    ) -> None:
+        """Choose the sample format (``"float"``/``"double"``) and port to send to (6.17.2.1)."""
+        await self._client.call(
+            CommandName.RAW_DATA_BIN_SETUP,
+            *builders.raw_data_bin_setup(data_format, port, live_mode),
+        )
+
+    @call_handle
+    async def get_raw_data_bin(self, acq_name: str) -> None:
+        """Send an acquisition to the port chosen with :meth:`raw_data_bin_setup` (6.17.2.1).
+
+        The samples do not come back through this connection: read them from the
+        port, for example with :func:`pyippdme.rawdata.transfer.read_samples`.
+        """
+        await self._client.call(CommandName.GET_RAW_DATA_BIN, String(acq_name))
 
     @call_handle
     async def get_adv_data_struct(self) -> AdvDataStruct:
@@ -844,10 +1337,12 @@ class IppDmeMachine:
         )
 
     async def start_session(self) -> None:
-        await self.client.start_session()
+        """Shortcut for ``machine.server.start_session()``."""
+        await self.server.start_session()
 
     async def end_session(self) -> None:
-        await self.client.end_session()
+        """Shortcut for ``machine.server.end_session()``."""
+        await self.server.end_session()
 
     async def close(self) -> None:
         await self.client.close()

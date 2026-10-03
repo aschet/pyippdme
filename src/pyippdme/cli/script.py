@@ -98,6 +98,11 @@ def _strip_leading_tag(text: str) -> str:
 VIRTUAL_HOST = "virtual"
 
 
+def describe_address(host: str, port: int) -> str:
+    """Name a connection target: ``host:port``, or ``in-process`` for the embedded server."""
+    return "in-process" if host == VIRTUAL_HOST else f"{host}:{port}"
+
+
 async def start_embedded_server() -> tuple[str, int, IppDmeServer[SimulationState]]:
     """Start an in-process VirtualCMM; return ``(host, port, server)`` to connect to it.
 

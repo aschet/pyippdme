@@ -24,7 +24,7 @@ Implemented so far:
   execution and `AbortE()`, error handling.
 - Client: `IppDmeClient`, a low-level client mirroring the wire protocol, and
   `IppDmeMachine`, a typed interface organized like the standard's object
-  model.
+  model that covers every command the simulation implements.
 - Server: `IppDmeServer`, a server you extend with your own command classes
   and machine backend.
 - Simulation: `VirtualCMM`, a simulated CMM to develop and test clients

@@ -105,7 +105,7 @@ from pyippdme.cli._interaction import (
     format_error,
     run_command_line,
 )
-from pyippdme.cli.script import VIRTUAL_HOST
+from pyippdme.cli.script import VIRTUAL_HOST, describe_address
 from pyippdme.client import IppDmeClient
 from pyippdme.exceptions import IppDmeConnectionError
 from pyippdme.protocol.network import TCP_NETWORK, MemoryNetwork
@@ -774,8 +774,9 @@ class IppDmeTui(App[None]):
         except IppDmeConnectionError as exc:
             self._append_log(f"[red]Connection failed: {escape_markup(str(exc))}[/red]")
             return
-        self.sub_title = f"{host}:{port}"
-        self._append_log(f"[green]Connected to {escape_markup(host)}:{port}[/green]")
+        address = describe_address(host, port)
+        self.sub_title = address
+        self._append_log(f"[green]Connected to {escape_markup(address)}[/green]")
         self._update_connection_button()
 
     async def _disconnect(self) -> None:

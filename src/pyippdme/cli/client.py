@@ -51,7 +51,7 @@ try:
 except ImportError:  # pragma: no cover - platforms without readline (e.g. Windows)
     readline = None  # type: ignore[assignment]
 
-from pyippdme.cli.script import run_line, run_script_lines, start_embedded_server
+from pyippdme.cli.script import describe_address, run_line, run_script_lines, start_embedded_server
 from pyippdme.cli.session_log import SessionLog
 from pyippdme.client import IppDmeClient
 from pyippdme.protocol.network import TCP_NETWORK
@@ -86,7 +86,7 @@ async def run(
         print("Started an in-process VirtualCMM")
     assert host is not None  # noqa: S101 (argparse requires host unless --virtual)
 
-    peer = f"{host}:{port}"
+    peer = describe_address(host, port)
     with contextlib.ExitStack() as files:
         log = SessionLog(
             files.enter_context(Path(session_log).open("w", buffering=1))

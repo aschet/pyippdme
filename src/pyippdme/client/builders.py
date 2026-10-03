@@ -220,3 +220,109 @@ def scan_on_curve(points: Sequence[CurvePoint], *, closed: bool = False) -> tupl
         format_arg,
         data_arg,
     )
+
+
+def _positional(*values: float | bool | None) -> tuple[Argument, ...]:
+    """Build bare numbers in order; ``None`` entries (trailing optional arguments) are left out."""
+    return tuple(
+        Number.of(1 if v is True else 0 if v is False else v) for v in values if v is not None
+    )
+
+
+def _flat(*parts: float | bool | Vec3 | None) -> tuple[Argument, ...]:
+    flat: list[float | bool | None] = []
+    for part in parts:
+        if isinstance(part, tuple):
+            flat.extend(part)
+        else:
+            flat.append(part)
+    return _positional(*flat)
+
+
+def vector(name: str, value: Vec3) -> NamedValue:
+    """Build a three-number named argument such as ``IJK(0,0,1)``."""
+    return NamedValue(name, tuple(Number.of(v) for v in value))
+
+
+def pt_meas_self_center(
+    x: float | None = None,
+    y: float | None = None,
+    z: float | None = None,
+    ijk: Vec3 | None = None,
+    lmn: Vec3 | None = None,
+) -> tuple[Argument, ...]:
+    """Build ``PtMeasSelfCenter``'s (or, with ``lmn``, ``PtMeasSelfCenterLocked``'s) arguments."""
+    arguments = list(
+        named_numbers((ParameterName.X, x), (ParameterName.Y, y), (ParameterName.Z, z))
+    )
+    if ijk is not None:
+        arguments.append(vector("IJK", ijk))
+    if lmn is not None:
+        arguments.append(vector("LMN", lmn))
+    return tuple(arguments)
+
+
+def on_move_report(time: float, dis: float, axes: Sequence[str]) -> tuple[Argument, ...]:
+    """Build ``OnMoveReport``'s argument list, e.g. ``Time(0.5), Dis(1), X(), Y()``."""
+    return (*named_numbers(("Time", time), ("Dis", dis)), *bare_names(*axes))
+
+
+def align_tool(
+    primary: Vec3, alpha: float, secondary: Vec3 | None = None, beta: float | None = None
+) -> tuple[Argument, ...]:
+    """Build ``AlignTool``'s arguments: ``i1,j1,k1,alpha`` or all of ``i1..k2,alpha,beta``."""
+    if (secondary is None) != (beta is None):
+        raise ValueError("secondary and beta must be given together")
+    return _flat(primary, secondary, alpha, beta)
+
+
+def alignment_axis(namespace: str, axis: str) -> tuple[Argument, ...]:
+    """Build ``CalcToolAlignment``'s argument, e.g. ``Tool.A()``."""
+    return (NamedValue(f"{namespace}.{axis}", ()),)
+
+
+def alignment_vectors(
+    namespace: str, primary: Vec3, secondary: Vec3 | None
+) -> tuple[Argument, ...]:
+    """Build ``CalcToolAngles``' argument, e.g. ``Tool.Alignment(i1,j1,k1[,i2,j2,k2])``."""
+    return (NamedValue(f"{namespace}.Alignment", _flat(primary, secondary)),)
+
+
+def raw_data_bin_setup(data_format: str, port: int, live_mode: bool) -> tuple[Argument, ...]:
+    """Build ``RawDataBinSetup``'s arguments."""
+    return (BasicName(data_format), Number.of(port), BasicName("On" if live_mode else "Off"))
+
+
+def scan_on_circle(
+    center: Vec3,
+    start: Vec3,
+    normal: Vec3,
+    delta: float,
+    surface_angle: float,
+    step_width: float,
+    rotary_table: bool | None = None,
+    *,
+    pitch: float | None = None,
+) -> tuple[Argument, ...]:
+    """Build ``ScanOnCircle``'s (or, with ``pitch``, ``ScanOnHelix``'s) positional arguments."""
+    return _flat(center, start, normal, delta, surface_angle, step_width, pitch, rotary_table)
+
+
+def density(
+    dis: float | None = None,
+    angle: float | None = None,
+    angle_base_length: float | None = None,
+    at_nominals: bool | None = None,
+) -> tuple[Argument, ...]:
+    """Build ``ScanOnCurveDensity``'s/``ScanUnknownDensity``'s optional named arguments."""
+    arguments = list(
+        named_numbers(("Dis", dis), ("Angle", angle), ("AngleBaseLength", angle_base_length))
+    )
+    if at_nominals is not None:
+        arguments.append(NamedValue("AtNominals", (Number.of(1 if at_nominals else 0),)))
+    return tuple(arguments)
+
+
+def positional(*parts: float | bool | Vec3 | None) -> tuple[Argument, ...]:
+    """Build bare positional numbers, flattening vectors, for the fixed-order scan commands."""
+    return _flat(*parts)

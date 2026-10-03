@@ -107,6 +107,10 @@ asyncio.run(main())
 Anything `IppDmeMachine` doesn't wrap is still reachable via
 `machine.client.call(...)` directly.
 
+The namespaces cover every command that `VirtualCMM` implements. For example
+`machine.server` has the session, error and property commands, including
+`clear_all_errors()`.
+
 Each method sends its command as soon as it is called and returns a handle.
 Awaiting the handle waits until the command is done and gives its typed result.
 You can also check the acknowledgement first:

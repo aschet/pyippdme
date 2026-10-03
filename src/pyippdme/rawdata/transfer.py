@@ -57,6 +57,47 @@ def pack_samples(values: npt.NDArray[np.float64], data_format: str) -> bytes:
     return np.asarray(values, dtype=_SAMPLE_DTYPES[data_format]).tobytes()
 
 
+def unpack_samples(payload: bytes, data_format: str) -> npt.NDArray[np.float64]:
+    """Unpack little-endian ``float``/``double`` samples (6.17.2.1) into rows of ``(x, y, z)``."""
+    if data_format not in _SAMPLE_DTYPES:
+        raise ValueError(f"data_format must be 'float' or 'double', got {data_format!r}")
+    samples = np.frombuffer(payload, dtype=_SAMPLE_DTYPES[data_format]).astype(np.float64)
+    if samples.size % 3:
+        raise ValueError(f"Expected a multiple of 3 samples, got {samples.size}")
+    return samples.reshape(-1, 3)
+
+
+async def read_samples(
+    host: str,
+    port: int,
+    data_format: str,
+    *,
+    network: Network = TCP_NETWORK,
+    timeout: float = 5.0,
+) -> npt.NDArray[np.float64]:
+    """Connect to a server's raw-data port, read until it closes, and unpack the samples.
+
+    The server only listens while a ``GetRawDataBin`` is running, so connection
+    attempts are retried until ``timeout`` seconds have passed.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        try:
+            reader, writer = await network.open_connection(host, port)
+            break
+        except OSError:
+            if loop.time() >= deadline:
+                raise
+            await asyncio.sleep(0.02)
+    try:
+        payload = await reader.read()
+    finally:
+        writer.close()
+        await writer.wait_closed()
+    return unpack_samples(payload, data_format)
+
+
 async def port_is_available(host: str, port: int, *, network: Network = TCP_NETWORK) -> bool:
     try:
         listener = await network.start_server(_discard_client, host, port)
