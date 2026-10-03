@@ -81,6 +81,29 @@ class _Handle:
     _task: asyncio.Task[Any]
     _ack_failed = False
 
+    async def _first_transaction(self) -> Transaction | None:
+        if not self._capture.first.done():
+            await asyncio.wait(
+                {self._capture.first, self._task}, return_when=asyncio.FIRST_COMPLETED
+            )
+        if not self._capture.first.done():
+            self._task.result()  # nothing was sent; surface why the method ended
+            return None
+        return self._capture.first.result()
+
+    async def transaction(self) -> Transaction:
+        """Return the :class:`~pyippdme.client.transaction.Transaction` of the sent command.
+
+        For the raw responses (:meth:`~pyippdme.client.transaction.Transaction.wait_complete`,
+        :meth:`~pyippdme.client.transaction.Transaction.stream`) when the method's own
+        parsed result is not what you need. This is the command the method exists
+        for, not any setup command it sends first.
+        """
+        transaction = await self._first_transaction()
+        if transaction is None:
+            raise IppDmeError("The method ended without sending a command")
+        return transaction
+
     async def acknowledged(self) -> None:
         """Wait until the server acknowledged the command (5.4).
 
@@ -92,15 +115,11 @@ class _Handle:
         is that of the command the method exists for, not of any setup command it
         sends first.
         """
-        if not self._capture.first.done():
-            await asyncio.wait(
-                {self._capture.first, self._task}, return_when=asyncio.FIRST_COMPLETED
-            )
-        if not self._capture.first.done():
-            self._task.result()  # nothing was sent; surface why the method ended
+        transaction = await self._first_transaction()
+        if transaction is None:
             return
         try:
-            await self._capture.first.result().wait_ack()
+            await transaction.wait_ack()
         except IppDmeError:
             self._ack_failed = True
             if self._task.done():

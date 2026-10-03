@@ -124,8 +124,16 @@ async for point in scan:                        # points as they arrive
 
 An Ack only means the server received the command. A command that then fails
 is reported after the Ack and raises `IppDmeServerError` when you await the
-handle, not from `acknowledged()`. For the raw responses, use
-`machine.client.send(...)`, which returns a `Transaction`.
+handle, not from `acknowledged()`.
+
+For the raw responses instead of the parsed result, `await call.transaction()`
+gives the `Transaction` of the command that was sent:
+
+```python
+call = machine.cart_cmm.pt_meas(x=1, y=2, z=3)
+transaction = await call.transaction()
+raw = await transaction.wait_complete()         # tuple of DataPayload nodes
+```
 
 ## In-process connections
 

@@ -152,3 +152,23 @@ async def test_stopping_a_stream_early_cancels_it(
     await asyncio.sleep(0.05)
     gated_backend.release.set()
     assert await started_machine.dme.get_machine_class()
+
+
+async def test_the_raw_responses_are_available_through_the_transaction(
+    started_machine: IppDmeMachine,
+) -> None:
+    call = started_machine.cart_cmm.pt_meas(x=1, y=2, z=3)
+    transaction = await call.transaction()
+    raw = await transaction.wait_complete()
+    assert [item.to_wire() for item in raw] == ["X(1),Y(2),Z(3)"]
+    assert await call == {"X": 1.0, "Y": 2.0, "Z": 3.0}
+
+
+async def test_the_transaction_of_a_stream_gives_the_raw_responses(
+    started_machine: IppDmeMachine, gated_backend: _GatedBackend
+) -> None:
+    gated_backend.release.set()
+    scan = started_machine.scanning.scan_on_line((0, 0, 0), (10, 0, 0), (0, 0, 1), 2.0)
+    transaction = await scan.transaction()
+    raw = await transaction.wait_complete()
+    assert [item.to_wire() for item in raw] == ["0,0,0", "10,0,0"]
