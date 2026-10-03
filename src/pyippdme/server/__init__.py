@@ -56,6 +56,13 @@ from pyippdme.protocol.codec import decode_command_line, encode_line
 from pyippdme.protocol.commands import CommandName
 from pyippdme.protocol.errors import DEFAULT_ERRORS, ErrorCode, ErrorSeverity, ServerError
 from pyippdme.protocol.hooks import LineHook, call_line_hook
+from pyippdme.protocol.network import (
+    TCP_NETWORK,
+    Listener,
+    Network,
+    StreamReaderLike,
+    StreamWriterLike,
+)
 from pyippdme.protocol.transport import DEFAULT_PORT, READ_LIMIT, LineTransport
 from pyippdme.server.backend import CancellationToken, MachineBackend
 from pyippdme.server.registry import (
@@ -112,11 +119,13 @@ class _ServerConnection(Generic[StateT]):
         csy_store: CsyStore,
         machine_class: str,
         state_factory: Callable[[], StateT],
+        network: Network,
         sample_surface: SampleSurface | None = None,
         on_line_received: LineHook | None = None,
         on_line_sent: LineHook | None = None,
     ) -> None:
         self._transport = transport
+        self._network = network
         self._registry = registry
         self._backend = backend
         self._csy_store = csy_store
@@ -261,6 +270,7 @@ class _ServerConnection(Generic[StateT]):
             csy_store=self._csy_store,
             cancel=cancel,
             sample_surface=self._sample_surface,
+            network=self._network,
             emit_event=self._emit_event,
         )
         try:
@@ -408,8 +418,10 @@ class IppDmeServer(Generic[StateT]):
     :class:`~pyippdme.server.registry.MachineState` itself provides (see
     :class:`~pyippdme.simulation.state.SimulationState` for this library's
     own bundled simulation's extension) - it must build the same concrete
-    type ``StateT`` this server is parameterized over. Pass
-    ``on_line_received``/``on_line_sent``/``on_connect``/``on_disconnect``
+    type ``StateT`` this server is parameterized over. Pass ``network`` to
+    listen somewhere other than TCP, e.g. a
+    :class:`~pyippdme.protocol.network.MemoryNetwork` for connections that stay
+    inside the process. Pass ``on_line_received``/``on_line_sent``/``on_connect``/``on_disconnect``
     for observe-only wire-level visibility (e.g. ``ippdme serve
     --session-log``); see :mod:`pyippdme.protocol.hooks`.
     """
@@ -422,6 +434,7 @@ class IppDmeServer(Generic[StateT]):
         machine_class: str = DEFAULT_MACHINE_CLASS,
         command_classes: Sequence[Callable[[CommandRegistry], None]] = (),
         state_factory: Callable[[], StateT] = MachineState,  # type: ignore[assignment]
+        network: Network = TCP_NETWORK,
         sample_surface: SampleSurface | None = None,
         on_line_received: LineHook | None = None,
         on_line_sent: LineHook | None = None,
@@ -435,6 +448,8 @@ class IppDmeServer(Generic[StateT]):
         self._state_factory = state_factory
         self.csy_store: CsyStore = csy_store if csy_store is not None else InMemoryCsyStore()
         self.machine_class = machine_class
+        #: Where this server's listener (and anything a handler has to open) comes from.
+        self.network = network
         #: The synthetic part ``PtMeas`` measures against, if any; see
         #: :mod:`pyippdme.server.surface`. ``None`` (the default) keeps
         #: ``PtMeas`` reporting the commanded position exactly.
@@ -453,7 +468,7 @@ class IppDmeServer(Generic[StateT]):
         #: connection/disconnection.
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
-        self._asyncio_server: asyncio.Server | None = None
+        self._listener: Listener | None = None
 
     async def start(self, host: str = "127.0.0.1", port: int = 0) -> int:
         """Bind and start accepting connections without blocking; return the bound port.
@@ -463,20 +478,20 @@ class IppDmeServer(Generic[StateT]):
         for embedding the server in-process alongside other work in the
         same event loop (a REPL/TUI driving it directly, a test fixture,
         ...) rather than running it as a standalone process. ``port=0``
-        (the default) lets the OS pick a free port, returned here so the
-        caller can connect to it. Call :meth:`close` when done.
+        (the default) lets the network pick a free port, returned here so
+        the caller can connect to it. Call :meth:`close` when done.
         """
-        self._asyncio_server = await asyncio.start_server(
+        self._listener = await self.network.start_server(
             self._on_client, host, port, limit=READ_LIMIT
         )
-        return int(self._asyncio_server.sockets[0].getsockname()[1])
+        return self._listener.port
 
     @property
     def port(self) -> int | None:
         """The port currently bound by :meth:`start`/:meth:`serve_forever`, or ``None``."""
-        if self._asyncio_server is None:
+        if self._listener is None:
             return None
-        return int(self._asyncio_server.sockets[0].getsockname()[1])
+        return self._listener.port
 
     async def serve_forever(
         self,
@@ -484,17 +499,15 @@ class IppDmeServer(Generic[StateT]):
         port: int = DEFAULT_PORT,
     ) -> None:
         await self.start(host, port)
-        assert self._asyncio_server is not None  # noqa: S101 (set by start() just above)
-        async with self._asyncio_server:
-            await self._asyncio_server.serve_forever()
+        assert self._listener is not None  # noqa: S101 (set by start() just above)
+        await self._listener.serve_forever()
 
     async def close(self) -> None:
-        if self._asyncio_server is not None:
-            self._asyncio_server.close()
-            await self._asyncio_server.wait_closed()
-            self._asyncio_server = None
+        if self._listener is not None:
+            await self._listener.close()
+            self._listener = None
 
-    async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _on_client(self, reader: StreamReaderLike, writer: StreamWriterLike) -> None:
         transport = LineTransport(reader, writer)
         logger.info("Client connected: %s", transport.peer)
         if self.on_connect is not None:
@@ -506,6 +519,7 @@ class IppDmeServer(Generic[StateT]):
             self.csy_store,
             self.machine_class,
             self._state_factory,
+            self.network,
             self.sample_surface,
             self.on_line_received,
             self.on_line_sent,

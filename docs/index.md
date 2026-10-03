@@ -107,6 +107,36 @@ asyncio.run(main())
 Anything `IppDmeMachine` doesn't wrap is still reachable via
 `machine.client.call(...)` directly.
 
+## In-process connections
+
+Everything that opens or accepts a connection (`IppDmeClient`, `IppDmeMachine`,
+`IppDmeServer`, `VirtualCMM`, `Spy`) takes a `network` argument. The default is
+TCP. A `MemoryNetwork` keeps the connections inside the process, so a server and
+its clients can talk without opening a port, which is handy for tests and for
+simulation:
+
+```python
+import asyncio
+from pyippdme import IppDmeMachine, VirtualCMM
+from pyippdme.protocol.network import MemoryNetwork
+
+async def main() -> None:
+    network = MemoryNetwork()
+    server = VirtualCMM(network=network)
+    port = await server.start()
+    machine = await IppDmeMachine.connect("virtual", port, network=network)
+    await machine.start_session()
+    print(await machine.cart_cmm.get_position())
+    await machine.close()
+    await server.close()
+
+asyncio.run(main())
+```
+
+A `MemoryNetwork` ignores host names and matches connections by port only. The
+network is a small protocol (`open_connection` and `start_server`, mirroring
+asyncio), so other implementations can be plugged in the same way.
+
 ## Static command catalog
 
 Building your own tooling on top of this package - a REPL/TUI completion

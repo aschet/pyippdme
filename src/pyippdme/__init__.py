@@ -19,6 +19,7 @@ from pyippdme.exceptions import (
 from pyippdme.protocol.commands import CommandName
 from pyippdme.protocol.errors import ErrorSeverity, ServerError
 from pyippdme.protocol.namespace import proprietary_name
+from pyippdme.protocol.network import TCP_NETWORK, MemoryNetwork, Network
 from pyippdme.protocol.parameters import ParameterName
 from pyippdme.protocol.transport import DEFAULT_PORT
 from pyippdme.server import IppDmeServer
@@ -42,6 +43,7 @@ __version__ = "0.1.0"
 __all__ = [
     "DEFAULT_COMMAND_CLASSES",
     "DEFAULT_PORT",
+    "TCP_NETWORK",
     "CommandContext",
     "CommandName",
     "CommandRegistry",
@@ -56,6 +58,8 @@ __all__ = [
     "IppDmeServerError",
     "IppDmeTimeoutError",
     "MachineState",
+    "MemoryNetwork",
+    "Network",
     "ParameterName",
     "PlaneSurface",
     "SampleSurface",

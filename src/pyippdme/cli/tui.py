@@ -105,8 +105,10 @@ from pyippdme.cli._interaction import (
     format_error,
     run_command_line,
 )
+from pyippdme.cli.script import VIRTUAL_HOST
 from pyippdme.client import IppDmeClient
 from pyippdme.exceptions import IppDmeConnectionError
+from pyippdme.protocol.network import TCP_NETWORK, MemoryNetwork
 from pyippdme.protocol.parameters import ParameterName
 from pyippdme.protocol.signature import DataType
 from pyippdme.protocol.transport import DEFAULT_PORT
@@ -550,12 +552,12 @@ class IppDmeTui(App[None]):
         if self._virtual:
             from pyippdme.simulation.virtual_cmm import VirtualCMM
 
-            self._embedded_server = VirtualCMM()
+            self._embedded_server = VirtualCMM(network=MemoryNetwork())
             port = await self._embedded_server.start()
-            self._append_log(f"[green]Started an in-process VirtualCMM on 127.0.0.1:{port}[/green]")
-            self.query_one("#host_input", Input).value = "127.0.0.1"
+            self._append_log("[green]Started an in-process VirtualCMM[/green]")
+            self.query_one("#host_input", Input).value = VIRTUAL_HOST
             self.query_one("#port_input", Input).value = str(port)
-            await self._connect("127.0.0.1", port)
+            await self._connect(VIRTUAL_HOST, port)
         elif self._initial_host:
             await self._connect(self._initial_host, self._initial_port)
         self.query_one("#command_input", Input).focus()
@@ -763,7 +765,12 @@ class IppDmeTui(App[None]):
     async def _connect(self, host: str, port: int) -> None:
         await self._disconnect()
         try:
-            self.client = await IppDmeClient.connect(host, port)
+            network = (
+                self._embedded_server.network
+                if host == VIRTUAL_HOST and self._embedded_server is not None
+                else TCP_NETWORK
+            )
+            self.client = await IppDmeClient.connect(host, port, network=network)
         except IppDmeConnectionError as exc:
             self._append_log(f"[red]Connection failed: {escape_markup(str(exc))}[/red]")
             return

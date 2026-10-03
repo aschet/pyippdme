@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 
+from pyippdme.protocol.network import TCP_NETWORK, Network, StreamReaderLike, StreamWriterLike
 from pyippdme.types.pointcloud import PointCloudSet
 
 #: How long a binary-socket listener waits for the client to connect before
@@ -56,17 +57,18 @@ def pack_samples(values: npt.NDArray[np.float64], data_format: str) -> bytes:
     return np.asarray(values, dtype=_SAMPLE_DTYPES[data_format]).tobytes()
 
 
-async def port_is_available(host: str, port: int) -> bool:
+async def port_is_available(host: str, port: int, *, network: Network = TCP_NETWORK) -> bool:
     try:
-        server = await asyncio.start_server(_discard_client, host, port)
+        listener = await network.start_server(_discard_client, host, port)
     except OSError:
         return False
-    server.close()
-    await server.wait_closed()
+    await listener.close()
     return True
 
 
-async def send_once(host: str, port: int, payload: bytes) -> None:
+async def send_once(
+    host: str, port: int, payload: bytes, *, network: Network = TCP_NETWORK
+) -> None:
     """Listen on ``(host, port)``, accept exactly one connection, write ``payload``, close.
 
     Bounded by :data:`BIN_SOCKET_ACCEPT_TIMEOUT` so a client that never
@@ -75,13 +77,13 @@ async def send_once(host: str, port: int, payload: bytes) -> None:
     one client connection is ever expected per acquisition retrieval.
     """
     loop = asyncio.get_running_loop()
-    connected: asyncio.Future[asyncio.StreamWriter] = loop.create_future()
+    connected: asyncio.Future[StreamWriterLike] = loop.create_future()
 
-    async def _on_client(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _on_client(_reader: StreamReaderLike, writer: StreamWriterLike) -> None:
         if not connected.done():
             connected.set_result(writer)
 
-    server = await asyncio.start_server(_on_client, host, port)
+    server = await network.start_server(_on_client, host, port)
     try:
         try:
             writer = await asyncio.wait_for(connected, timeout=BIN_SOCKET_ACCEPT_TIMEOUT)
@@ -96,11 +98,10 @@ async def send_once(host: str, port: int, payload: bytes) -> None:
             writer.close()
             await writer.wait_closed()
     finally:
-        server.close()
-        await server.wait_closed()
+        await server.close()
 
 
-async def _discard_client(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+async def _discard_client(_reader: StreamReaderLike, writer: StreamWriterLike) -> None:
     writer.close()
 
 

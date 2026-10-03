@@ -33,6 +33,7 @@ from pyippdme.protocol.commands import CommandName
 from pyippdme.protocol.errors import ErrorSeverity, ServerError
 from pyippdme.protocol.hooks import LineHook as LineHook
 from pyippdme.protocol.hooks import call_line_hook
+from pyippdme.protocol.network import TCP_NETWORK, Network
 from pyippdme.protocol.transport import DEFAULT_PORT, LineTransport
 
 logger = logging.getLogger("pyippdme.client")
@@ -69,10 +70,11 @@ class IppDmeClient:
         host: str,
         port: int = DEFAULT_PORT,
         *,
+        network: Network = TCP_NETWORK,
         on_line_sent: LineHook | None = None,
         on_line_received: LineHook | None = None,
     ) -> IppDmeClient:
-        transport = await LineTransport.connect(host, port)
+        transport = await LineTransport.connect(host, port, network=network)
         return cls(transport, on_line_sent=on_line_sent, on_line_received=on_line_received)
 
     async def close(self) -> None:

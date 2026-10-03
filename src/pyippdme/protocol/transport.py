@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MPL-2.0
 
-"""Line-oriented TCP transport (5.1, 5.8)."""
+"""Line-oriented transport over a byte stream (5.1, 5.8)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 
 from pyippdme.exceptions import IppDmeConnectionError
+from pyippdme.protocol.network import TCP_NETWORK, Network, StreamReaderLike, StreamWriterLike
 
 #: The standard recommends port 1294 for I++ DME clients and servers (5.0).
 DEFAULT_PORT = 1294
@@ -23,16 +24,18 @@ READ_LIMIT = 9 * 1024 * 1024
 
 
 class LineTransport:
-    """Reads/writes ``<CR><LF>``-terminated ASCII lines over an asyncio TCP stream."""
+    """Reads/writes ``<CR><LF>``-terminated ASCII lines over an asyncio-style stream."""
 
-    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    def __init__(self, reader: StreamReaderLike, writer: StreamWriterLike) -> None:
         self._reader = reader
         self._writer = writer
 
     @classmethod
-    async def connect(cls, host: str, port: int = DEFAULT_PORT) -> LineTransport:
+    async def connect(
+        cls, host: str, port: int = DEFAULT_PORT, *, network: Network = TCP_NETWORK
+    ) -> LineTransport:
         try:
-            reader, writer = await asyncio.open_connection(host, port, limit=READ_LIMIT)
+            reader, writer = await network.open_connection(host, port, limit=READ_LIMIT)
         except OSError as exc:
             raise IppDmeConnectionError(f"Could not connect to {host}:{port}: {exc}") from exc
         return cls(reader, writer)

@@ -48,6 +48,7 @@ from pyippdme.protocol.ast import (
     Xml,
 )
 from pyippdme.protocol.commands import CommandName
+from pyippdme.protocol.network import TCP_NETWORK, Network
 from pyippdme.types.csy import CoordinateTransform
 from pyippdme.types.rawdata import AdvDataStruct
 from pyippdme.types.rawdata import from_xml as adv_data_struct_from_xml
@@ -742,17 +743,22 @@ class IppDmeMachine:
         host: str,
         port: int,
         *,
+        network: Network = TCP_NETWORK,
         on_line_sent: LineHook | None = None,
         on_line_received: LineHook | None = None,
     ) -> IppDmeMachine:
         """Connect and wrap the result.
 
-        ``on_line_sent``/``on_line_received`` are as in
+        ``network``, ``on_line_sent`` and ``on_line_received`` are as in
         :meth:`~pyippdme.client.IppDmeClient.connect`.
         """
         return cls(
             await IppDmeClient.connect(
-                host, port, on_line_sent=on_line_sent, on_line_received=on_line_received
+                host,
+                port,
+                network=network,
+                on_line_sent=on_line_sent,
+                on_line_received=on_line_received,
             )
         )
 

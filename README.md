@@ -33,6 +33,8 @@ Implemented so far:
   `Scanning`, `FormTester`, `Mover`, `RotaryTable`, `Part`, raw data
   handling). Several scanning and alignment commands are only plausible
   responses, not real simulations.
+- Networks: connections run over TCP by default, or over an in-memory
+  network inside the process, without opening a port.
 - Spy: a transparent proxy that logs the traffic between a client and a
   server.
 - CLI and TUI: `ippdme client`, `ippdme serve`, `ippdme spy` and a

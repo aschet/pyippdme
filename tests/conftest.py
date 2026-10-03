@@ -9,15 +9,21 @@ from collections.abc import AsyncIterator
 import pytest
 
 from pyippdme import IppDmeClient, VirtualCMM
+from pyippdme.protocol.network import MemoryNetwork
 from pyippdme.types.csy import InMemoryCsyStore
 
 
 @pytest.fixture
-async def server() -> AsyncIterator[VirtualCMM]:
+def network() -> MemoryNetwork:
+    return MemoryNetwork()
+
+
+@pytest.fixture
+async def server(network: MemoryNetwork) -> AsyncIterator[VirtualCMM]:
     # In-memory, not VirtualCMM's own persistent-by-default FileCsyStore
     # (~/.pyippdme/csy): tests must not leak named coordinate systems into
     # the real user's home directory or across otherwise-unrelated test runs.
-    srv = VirtualCMM(csy_store=InMemoryCsyStore())
+    srv = VirtualCMM(csy_store=InMemoryCsyStore(), network=network)
     await srv.start("127.0.0.1", 0)
     try:
         yield srv
@@ -32,8 +38,8 @@ def server_port(server: VirtualCMM) -> int:
 
 
 @pytest.fixture
-async def client(server_port: int) -> AsyncIterator[IppDmeClient]:
-    c = await IppDmeClient.connect("127.0.0.1", server_port)
+async def client(network: MemoryNetwork, server_port: int) -> AsyncIterator[IppDmeClient]:
+    c = await IppDmeClient.connect("127.0.0.1", server_port, network=network)
     try:
         yield c
     finally:
@@ -44,3 +50,19 @@ async def client(server_port: int) -> AsyncIterator[IppDmeClient]:
 async def started_client(client: IppDmeClient) -> IppDmeClient:
     await client.start_session()
     return client
+
+
+@pytest.fixture
+async def tcp_server() -> AsyncIterator[VirtualCMM]:
+    srv = VirtualCMM(csy_store=InMemoryCsyStore())
+    await srv.start("127.0.0.1", 0)
+    try:
+        yield srv
+    finally:
+        await srv.close()
+
+
+@pytest.fixture
+def tcp_server_port(tcp_server: VirtualCMM) -> int:
+    assert tcp_server.port is not None
+    return tcp_server.port

@@ -20,6 +20,7 @@ from pyippdme import IppDmeClient
 from pyippdme.exceptions import IppDmeServerError
 from pyippdme.protocol.ast import BasicName, DataPayload, Items, NamedValue, Number, String, Xml
 from pyippdme.protocol.commands import CommandName
+from pyippdme.protocol.network import TCP_NETWORK, MemoryNetwork, Network
 from pyippdme.protocol.parameters import ParameterName
 from pyippdme.simulation.classes.rawdata_class import _SWEEP_POINTS_PER_SEGMENT
 from pyippdme.types.pointcloud import from_xml as point_cloud_from_xml
@@ -214,26 +215,42 @@ async def test_raw_data_bin_setup_rejects_bad_format(started_client: IppDmeClien
     assert excinfo.value.error.number == "5000"
 
 
-async def test_get_raw_data_bin_streams_over_the_negotiated_port(
-    started_client: IppDmeClient,
-) -> None:
-    await _acquire(started_client, "Acq1")
+async def _stream_bin(client: IppDmeClient, network: Network) -> bytes:
+    await _acquire(client, "Acq1")
     port = _free_port()
-    await started_client.call(
+    await client.call(
         CommandName.RAW_DATA_BIN_SETUP, BasicName("double"), Number.of(port), BasicName("Off")
     )
 
     async def bin_client() -> bytes:
         await asyncio.sleep(0.05)
-        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        reader, writer = await network.open_connection("127.0.0.1", port)
         payload = await reader.read(1024)
         writer.close()
         return payload
 
     _server_result, payload = await asyncio.gather(
-        started_client.call(CommandName.GET_RAW_DATA_BIN, String("Acq1")), bin_client()
+        client.call(CommandName.GET_RAW_DATA_BIN, String("Acq1")), bin_client()
     )
+    return payload
+
+
+async def test_get_raw_data_bin_streams_over_the_negotiated_port(
+    started_client: IppDmeClient, network: MemoryNetwork
+) -> None:
+    payload = await _stream_bin(started_client, network)
     # Not exactly (0, 0, 0): a little measurement noise is added.
+    (x, y, z) = struct.unpack("<3d", payload)
+    assert (x, y, z) == pytest.approx((0.0, 0.0, 0.0), abs=0.05)
+
+
+async def test_get_raw_data_bin_streams_over_real_tcp(tcp_server_port: int) -> None:
+    client = await IppDmeClient.connect("127.0.0.1", tcp_server_port)
+    try:
+        await client.start_session()
+        payload = await _stream_bin(client, TCP_NETWORK)
+    finally:
+        await client.close()
     (x, y, z) = struct.unpack("<3d", payload)
     assert (x, y, z) == pytest.approx((0.0, 0.0, 0.0), abs=0.05)
 

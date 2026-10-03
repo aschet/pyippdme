@@ -77,6 +77,7 @@ _RAW_DATA_BIN_SETUP_PARAMS = (
     Parameter("Port", DataType.INT, positional=True),
     Parameter("LiveMode", DataType.NAME, positional=True),
 )
+_ANY_INTERFACE = "0.0.0.0"  # noqa: S104 # nosec B104
 _ACQUISITION_TYPES = ("SingleShot", "MultiShot", "Sweep")
 #: A plausible order-of-magnitude figure for an optical/laser point sensor's
 #: measurement noise (single-digit micrometers is typical across vendors -
@@ -230,7 +231,7 @@ async def _raw_data_bin_setup(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerRe
         )
     if live_mode not in ("On", "Off"):
         raise bad_argument(CommandName.RAW_DATA_BIN_SETUP, "LiveMode must be On or Off")
-    if not await port_is_available("0.0.0.0", port):  # noqa: S104 # nosec B104
+    if not await port_is_available(_ANY_INTERFACE, port, network=ctx.network):
         raise ServerError(
             ErrorSeverity.ERROR,
             ErrorCode.PORT_NOT_AVAILABLE,
@@ -255,7 +256,7 @@ async def _get_raw_data_bin(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResu
     # "0.0.0.0": accept the client's connection to the negotiated port on any
     # interface, matching the "different computers" cross-machine use case
     # RawDataBinSetup's Port parameter exists for.
-    await send_once("0.0.0.0", ctx.state.raw_data.bin_port, payload)  # noqa: S104 # nosec B104
+    await send_once(_ANY_INTERFACE, ctx.state.raw_data.bin_port, payload, network=ctx.network)
     return None
 
 

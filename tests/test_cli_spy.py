@@ -36,11 +36,11 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-async def _spy_a_simple_session(server_port: int, **run_kwargs: object) -> int:
+async def _spy_a_simple_session(tcp_server_port: int, **run_kwargs: object) -> int:
     """Start a spy (per ``run_kwargs``), run one StartSession()+GetDMEVersion() through it."""
     spy_port = _free_port()
     task = asyncio.create_task(
-        run("127.0.0.1", server_port, "127.0.0.1", spy_port, **run_kwargs)  # type: ignore[arg-type]
+        run("127.0.0.1", tcp_server_port, "127.0.0.1", spy_port, **run_kwargs)  # type: ignore[arg-type]
     )
     try:
         await asyncio.sleep(0.05)
@@ -57,10 +57,10 @@ async def _spy_a_simple_session(server_port: int, **run_kwargs: object) -> int:
 
 
 async def test_session_log_is_interleaved_timestamped_marked_and_tag_kept(
-    server_port: int, tmp_path: Path
+    tcp_server_port: int, tmp_path: Path
 ) -> None:
     log_path = tmp_path / "session.log"
-    await _spy_a_simple_session(server_port, session_log=str(log_path))
+    await _spy_a_simple_session(tcp_server_port, session_log=str(log_path))
 
     lines = log_path.read_text().splitlines()
     matches = [_SESSION_LOG_LINE_RE.match(line) for line in lines]
@@ -81,14 +81,14 @@ async def test_session_log_is_interleaved_timestamped_marked_and_tag_kept(
 
 
 async def test_commands_file_is_replayable_by_ippdme_script(
-    server_port: int, tmp_path: Path
+    tcp_server_port: int, tmp_path: Path
 ) -> None:
     commands_path = tmp_path / "commands.txt"
-    await _spy_a_simple_session(server_port, commands_file=str(commands_path))
+    await _spy_a_simple_session(tcp_server_port, commands_file=str(commands_path))
 
     assert commands_path.read_text().splitlines() == ["StartSession()", "GetDMEVersion()"]
 
-    replay_client = await IppDmeClient.connect("127.0.0.1", server_port)
+    replay_client = await IppDmeClient.connect("127.0.0.1", tcp_server_port)
     try:
         output = io.StringIO()
         await run_script_lines(replay_client, commands_path, output)
@@ -98,12 +98,12 @@ async def test_commands_file_is_replayable_by_ippdme_script(
 
 
 async def test_session_log_and_commands_file_work_together(
-    server_port: int, tmp_path: Path
+    tcp_server_port: int, tmp_path: Path
 ) -> None:
     log_path = tmp_path / "session.log"
     commands_path = tmp_path / "commands.txt"
     await _spy_a_simple_session(
-        server_port, session_log=str(log_path), commands_file=str(commands_path)
+        tcp_server_port, session_log=str(log_path), commands_file=str(commands_path)
     )
 
     assert commands_path.read_text().splitlines() == ["StartSession()", "GetDMEVersion()"]

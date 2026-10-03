@@ -34,6 +34,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
+from pyippdme.protocol.network import (
+    TCP_NETWORK,
+    Listener,
+    Network,
+    StreamReaderLike,
+    StreamWriterLike,
+)
 from pyippdme.protocol.transport import DEFAULT_PORT, READ_LIMIT
 
 logger = logging.getLogger("pyippdme.spy")
@@ -97,16 +104,18 @@ class Spy:
         host: str,
         port: int,
         *,
+        network: Network = TCP_NETWORK,
         on_message: MessageHook | None = None,
         on_connect: ConnectionHook | None = None,
         on_disconnect: ConnectionHook | None = None,
     ) -> None:
+        self._network = network
         self._host = host
         self._port = port
         self._on_message = on_message
         self._on_connect = on_connect
         self._on_disconnect = on_disconnect
-        self._asyncio_server: asyncio.Server | None = None
+        self._listener: Listener | None = None
         self._next_connection_id = 1
 
     async def start(self, host: str = "127.0.0.1", port: int = 0) -> int:
@@ -116,17 +125,17 @@ class Spy:
         caller can connect to it (embedding a spy in a test, say). Call
         :meth:`close` when done.
         """
-        self._asyncio_server = await asyncio.start_server(
+        self._listener = await self._network.start_server(
             self._on_client, host, port, limit=READ_LIMIT
         )
-        return int(self._asyncio_server.sockets[0].getsockname()[1])
+        return self._listener.port
 
     @property
     def port(self) -> int | None:
         """The port currently bound by :meth:`start`/:meth:`serve_forever`, or ``None``."""
-        if self._asyncio_server is None:
+        if self._listener is None:
             return None
-        return int(self._asyncio_server.sockets[0].getsockname()[1])
+        return self._listener.port
 
     async def serve_forever(
         self,
@@ -134,23 +143,21 @@ class Spy:
         port: int = DEFAULT_PORT,
     ) -> None:
         await self.start(host, port)
-        assert self._asyncio_server is not None  # noqa: S101 (set by start() just above)
-        async with self._asyncio_server:
-            await self._asyncio_server.serve_forever()
+        assert self._listener is not None  # noqa: S101 (set by start() just above)
+        await self._listener.serve_forever()
 
     async def close(self) -> None:
-        if self._asyncio_server is not None:
-            self._asyncio_server.close()
-            await self._asyncio_server.wait_closed()
-            self._asyncio_server = None
+        if self._listener is not None:
+            await self._listener.close()
+            self._listener = None
 
-    async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _on_client(self, reader: StreamReaderLike, writer: StreamWriterLike) -> None:
         connection_id = self._next_connection_id
         self._next_connection_id += 1
         client_peer = _peer(writer)
 
         try:
-            upstream_reader, upstream_writer = await asyncio.open_connection(
+            upstream_reader, upstream_writer = await self._network.open_connection(
                 self._host, self._port, limit=READ_LIMIT
             )
         except OSError:
@@ -182,8 +189,8 @@ class Spy:
 
     async def _pump(
         self,
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
+        reader: StreamReaderLike,
+        writer: StreamWriterLike,
         connection_id: int,
         direction: SpyDirection,
     ) -> None:
@@ -208,13 +215,13 @@ class Spy:
             return
 
 
-async def _close(writer: asyncio.StreamWriter) -> None:
+async def _close(writer: StreamWriterLike) -> None:
     writer.close()
     with contextlib.suppress(OSError):
         await writer.wait_closed()
 
 
-def _peer(writer: asyncio.StreamWriter) -> str:
+def _peer(writer: StreamWriterLike) -> str:
     peername = writer.get_extra_info("peername")
     if not peername:
         return "<unknown>"

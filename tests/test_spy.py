@@ -28,8 +28,8 @@ async def _start_spy(target_port: int, **hooks: object) -> tuple[Spy, int]:
 
 
 async def test_relays_a_full_session_unchanged() -> None:
-    server, server_port = await _start_server()
-    spy, spy_port = await _start_spy(server_port)
+    server, tcp_server_port = await _start_server()
+    spy, spy_port = await _start_spy(tcp_server_port)
     try:
         client = await IppDmeClient.connect("127.0.0.1", spy_port)
         try:
@@ -44,9 +44,9 @@ async def test_relays_a_full_session_unchanged() -> None:
 
 
 async def test_on_message_reports_both_directions_verbatim() -> None:
-    server, server_port = await _start_server()
+    server, tcp_server_port = await _start_server()
     messages: list[SpyMessage] = []
-    spy, spy_port = await _start_spy(server_port, on_message=messages.append)
+    spy, spy_port = await _start_spy(tcp_server_port, on_message=messages.append)
     try:
         client = await IppDmeClient.connect("127.0.0.1", spy_port)
         try:
@@ -68,10 +68,10 @@ async def test_on_message_reports_both_directions_verbatim() -> None:
 
 
 async def test_on_connect_and_on_disconnect_fire_with_connection_id_and_peer() -> None:
-    server, server_port = await _start_server()
+    server, tcp_server_port = await _start_server()
     events: list[tuple[str, int, str]] = []
     spy, spy_port = await _start_spy(
-        server_port,
+        tcp_server_port,
         on_connect=lambda cid, peer: events.append(("connect", cid, peer)),
         on_disconnect=lambda cid, peer: events.append(("disconnect", cid, peer)),
     )
@@ -90,10 +90,10 @@ async def test_on_connect_and_on_disconnect_fire_with_connection_id_and_peer() -
 
 
 async def test_each_connection_gets_a_distinct_connection_id() -> None:
-    server, server_port = await _start_server()
+    server, tcp_server_port = await _start_server()
     connect_ids: list[int] = []
     spy, spy_port = await _start_spy(
-        server_port, on_connect=lambda cid, _peer: connect_ids.append(cid)
+        tcp_server_port, on_connect=lambda cid, _peer: connect_ids.append(cid)
     )
     try:
         first = await IppDmeClient.connect("127.0.0.1", spy_port)
@@ -109,12 +109,12 @@ async def test_each_connection_gets_a_distinct_connection_id() -> None:
 
 
 async def test_a_raising_hook_does_not_break_the_relay() -> None:
-    server, server_port = await _start_server()
+    server, tcp_server_port = await _start_server()
 
     def _bad_hook(_message: SpyMessage) -> None:
         raise RuntimeError("boom")
 
-    spy, spy_port = await _start_spy(server_port, on_message=_bad_hook)
+    spy, spy_port = await _start_spy(tcp_server_port, on_message=_bad_hook)
     try:
         client = await IppDmeClient.connect("127.0.0.1", spy_port)
         try:

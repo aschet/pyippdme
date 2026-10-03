@@ -41,6 +41,7 @@ from typing import Any, Generic, TypeAlias, TypeVar
 from pyippdme.protocol.ast import Argument, DataPayload, EventTag, NamedValue, TagLike
 from pyippdme.protocol.errors import ServerError
 from pyippdme.protocol.namespace import proprietary_name
+from pyippdme.protocol.network import TCP_NETWORK, Network
 from pyippdme.protocol.signature import Parameter
 from pyippdme.server.backend import CancellationToken, MachineBackend
 from pyippdme.server.surface import SampleSurface
@@ -156,6 +157,10 @@ class CommandContext(Generic[StateT]):
     #: ``PtMeas`` reporting the commanded position exactly, as if nothing
     #: were ever really touched.
     sample_surface: SampleSurface | None = None
+    #: Where a handler that has to open its own connection or listener (the
+    #: raw-data binary socket, 6.17.2.1) gets it from; the server's own
+    #: :class:`~pyippdme.protocol.network.Network`.
+    network: Network = TCP_NETWORK
     #: Sends one extra data message tagged with something other than this
     #: transaction's own ``tag`` - the seam a handler uses to push an
     #: ``OnMoveReport``/``OnMoveReportE`` daemon's report (see

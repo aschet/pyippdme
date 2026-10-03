@@ -28,8 +28,8 @@ def _dropdown_values(autocomplete: AutoComplete) -> list[str]:
     return values
 
 
-async def test_tui_connects_and_round_trips_a_command(server_port: int) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+async def test_tui_connects_and_round_trips_a_command(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         log = app.query_one("#log", RichLog)
@@ -49,8 +49,8 @@ async def test_tui_connects_and_round_trips_a_command(server_port: int) -> None:
         assert "2.5" in text
 
 
-async def test_tui_shows_server_error(server_port: int) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+async def test_tui_shows_server_error(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -63,8 +63,8 @@ async def test_tui_shows_server_error(server_port: int) -> None:
         assert "0008" in text
 
 
-async def test_tui_sidebar_selection_fills_command_input(server_port: int) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+async def test_tui_sidebar_selection_fills_command_input(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         list_view = app.query_one("#sidebar", ListView)
@@ -105,7 +105,7 @@ async def test_tui_virtual_starts_and_connects_to_an_embedded_server() -> None:
     assert app._embedded_server is None
 
 
-async def test_tui_connection_button_toggles_label_and_variant(server_port: int) -> None:
+async def test_tui_connection_button_toggles_label_and_variant(tcp_server_port: int) -> None:
     app = IppDmeTui(virtual=True)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -123,10 +123,10 @@ async def test_tui_connection_button_toggles_label_and_variant(server_port: int)
 
 
 async def test_tui_command_input_shows_a_dropdown_with_multiple_matches(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """The original bug this replaced SuggestFromList over: two commands share a prefix."""
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -144,9 +144,9 @@ async def test_tui_command_input_shows_a_dropdown_with_multiple_matches(
 
 
 async def test_tui_command_input_tab_accepts_the_highlighted_dropdown_item(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -165,10 +165,10 @@ async def test_tui_command_input_tab_accepts_the_highlighted_dropdown_item(
 
 
 async def test_tui_command_input_tab_completes_an_argument_name_in_place(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """Regression test: accepting an argument completion must not wipe out the command name."""
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -194,9 +194,9 @@ async def test_tui_command_input_tab_completes_an_argument_name_in_place(
 
 
 async def test_tui_command_input_tab_closes_a_zero_argument_command(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -213,10 +213,10 @@ async def test_tui_command_input_tab_closes_a_zero_argument_command(
 
 
 async def test_tui_command_input_enter_does_not_submit_an_incomplete_command_name(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """Accepting "GoTo" opens its parens for more typing - Enter must not also submit that."""
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -235,9 +235,9 @@ async def test_tui_command_input_enter_does_not_submit_an_incomplete_command_nam
 
 
 async def test_tui_command_input_enter_still_submits_a_zero_argument_command(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -255,7 +255,7 @@ async def test_tui_command_input_enter_still_submits_a_zero_argument_command(
 
 
 async def test_tui_command_input_enter_still_submits_a_help_meta_command(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """Regression test: completing ".help GoTo"'s argument must not swallow Enter's submit.
 
@@ -263,7 +263,7 @@ async def test_tui_command_input_enter_still_submits_a_help_meta_command(
     call would, but must not get the "open its parens" treatment here -
     ".help" only ever wants the plain name.
     """
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -281,7 +281,7 @@ async def test_tui_command_input_enter_still_submits_a_help_meta_command(
 
 
 async def test_tui_command_input_tab_works_past_the_first_argument(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """Regression test: Tab must keep working once the partial word already fully matches.
 
@@ -290,7 +290,7 @@ async def test_tui_command_input_tab_works_past_the_first_argument(
     or Tab silently does nothing and falls through to its default
     focus-switch action instead of accepting the completion.
     """
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -310,9 +310,9 @@ async def test_tui_command_input_tab_works_past_the_first_argument(
 
 
 async def test_tui_command_input_tab_switches_focus_with_nothing_to_complete(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -328,9 +328,9 @@ async def test_tui_command_input_tab_switches_focus_with_nothing_to_complete(
 
 
 async def test_tui_command_input_suggests_argument_names_inside_a_command(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -346,10 +346,10 @@ async def test_tui_command_input_suggests_argument_names_inside_a_command(
 
 
 async def test_tui_command_input_suggests_axis_names_for_a_purely_enum_command(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """Get(...)'s only argument (Axes) is DataType.ENUM - the axis-name fallback applies."""
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -365,10 +365,10 @@ async def test_tui_command_input_suggests_axis_names_for_a_purely_enum_command(
 
 
 async def test_tui_command_input_combines_named_and_enum_fallback_arguments(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """GoTo(...) has both a real named argument (Sync) and an ENUM one (Positions)."""
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -384,13 +384,13 @@ async def test_tui_command_input_combines_named_and_enum_fallback_arguments(
 
 
 async def test_tui_command_input_suggests_nothing_inside_a_positional_command(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """ScanOnLine(1, 2, 3, ...) takes bare values in order, not Name(value) pairs.
 
     Suggesting its parameter names (Sx, Sy, ...) would be actively wrong.
     """
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -406,7 +406,7 @@ async def test_tui_command_input_suggests_nothing_inside_a_positional_command(
 
 
 async def test_tui_typing_a_positional_command_shows_a_live_argument_hint(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """The panel must point at which bare value comes next as the user types.
 
@@ -414,7 +414,7 @@ async def test_tui_typing_a_positional_command_shows_a_live_argument_hint(
     in-context hint for a positional command like
     CenterPart(Px, Py, Pz, Limit).
     """
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -435,10 +435,10 @@ async def test_tui_typing_a_positional_command_shows_a_live_argument_hint(
 
 
 async def test_tui_signature_panel_autoscrolls_to_keep_the_highlighted_argument_visible(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """ScanOnHelix has 14 arguments - more than the panel's fixed height shows at once."""
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -458,10 +458,10 @@ async def test_tui_signature_panel_autoscrolls_to_keep_the_highlighted_argument_
 
 
 async def test_tui_typing_a_named_command_shows_its_signature_without_a_marker(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """Order doesn't matter for a named (Name(value)) command, so no argument is singled out."""
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -479,10 +479,10 @@ async def test_tui_typing_a_named_command_shows_its_signature_without_a_marker(
 
 
 async def test_tui_typing_a_command_name_does_not_touch_the_signature_panel(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """No hint to show yet before the cursor is inside a command's parens."""
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -497,10 +497,10 @@ async def test_tui_typing_a_command_name_does_not_touch_the_signature_panel(
 
 
 async def test_tui_help_for_a_positional_command_lists_its_parameters(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """A positional command's help is just its parameter list too - no command name header."""
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -547,8 +547,8 @@ def test_format_signature_is_empty_for_a_zero_argument_command() -> None:
     assert _format_signature("StartSession") == ""
 
 
-async def test_tui_command_input_history_cycles_with_up_down(server_port: int) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+async def test_tui_command_input_history_cycles_with_up_down(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -592,9 +592,9 @@ async def test_tui_command_input_history_cycles_with_up_down(server_port: int) -
 
 
 async def test_tui_command_input_history_skips_consecutive_duplicates(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -608,32 +608,32 @@ async def test_tui_command_input_history_skips_consecutive_duplicates(
         assert app._history == ["StartSession()"]
 
 
-async def test_tui_sidebar_has_a_caption(server_port: int) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+async def test_tui_sidebar_has_a_caption(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         caption = app.query_one("#sidebar_caption", Static)
         assert str(caption.content) == "Commands"
 
 
-async def test_tui_signature_panel_has_a_caption(server_port: int) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+async def test_tui_signature_panel_has_a_caption(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         caption = app.query_one("#signature_caption", Static)
         assert str(caption.content) == "Arguments"
 
 
-async def test_tui_signature_panel_shows_placeholder_initially(server_port: int) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+async def test_tui_signature_panel_shows_placeholder_initially(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         panel = app.query_one("#signature_text", Static)
         assert str(panel.content) == _HELP_PLACEHOLDER
 
 
-async def test_tui_sidebar_highlight_updates_the_signature_panel(server_port: int) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+async def test_tui_sidebar_highlight_updates_the_signature_panel(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         list_view = app.query_one("#sidebar", ListView)
@@ -645,8 +645,8 @@ async def test_tui_sidebar_highlight_updates_the_signature_panel(server_port: in
         assert str(panel.content) != _HELP_PLACEHOLDER
 
 
-async def test_tui_help_meta_command_shows_a_signature(server_port: int) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+async def test_tui_help_meta_command_shows_a_signature(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -667,8 +667,8 @@ async def test_tui_help_meta_command_shows_a_signature(server_port: int) -> None
         assert r"Sync* \[int]" in text
 
 
-async def test_tui_help_meta_command_is_never_sent_to_the_server(server_port: int) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+async def test_tui_help_meta_command_is_never_sent_to_the_server(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -687,13 +687,13 @@ async def test_tui_help_meta_command_is_never_sent_to_the_server(server_port: in
         assert not any("Parse error" in line for line in log_lines)
 
 
-async def test_tui_help_meta_command_output_is_echoed_to_the_log(server_port: int) -> None:
+async def test_tui_help_meta_command_output_is_echoed_to_the_log(tcp_server_port: int) -> None:
     """Regression test: .help's response must be visible in the main log, not only the panel.
 
     The signature panel alone isn't where anyone watching the log for a
     response to what they just typed would think to look.
     """
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -711,8 +711,8 @@ async def test_tui_help_meta_command_output_is_echoed_to_the_log(server_port: in
         assert "Sync* [int]" in log_text
 
 
-async def test_tui_help_meta_command_without_argument_shows_usage(server_port: int) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+async def test_tui_help_meta_command_without_argument_shows_usage(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -726,8 +726,8 @@ async def test_tui_help_meta_command_without_argument_shows_usage(server_port: i
         assert str(panel.content) == _HELP_USAGE
 
 
-async def test_tui_help_meta_command_for_an_unknown_command(server_port: int) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+async def test_tui_help_meta_command_for_an_unknown_command(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -741,8 +741,8 @@ async def test_tui_help_meta_command_for_an_unknown_command(server_port: int) ->
         assert str(panel.content) == "Unknown command: Bogus"
 
 
-async def test_tui_help_meta_command_is_case_insensitive(server_port: int) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+async def test_tui_help_meta_command_is_case_insensitive(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -756,8 +756,8 @@ async def test_tui_help_meta_command_is_case_insensitive(server_port: int) -> No
         assert r"Positions \[enum]" in str(panel.content)
 
 
-async def test_tui_unknown_meta_command_is_reported_in_the_log(server_port: int) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+async def test_tui_unknown_meta_command_is_reported_in_the_log(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -771,9 +771,9 @@ async def test_tui_unknown_meta_command_is_reported_in_the_log(server_port: int)
         assert "Unknown meta-command" in log_text
 
 
-async def test_tui_help_zero_argument_command(server_port: int) -> None:
+async def test_tui_help_zero_argument_command(tcp_server_port: int) -> None:
     """A command with nothing to list renders as an empty panel, not a placeholder message."""
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -788,10 +788,10 @@ async def test_tui_help_zero_argument_command(server_port: int) -> None:
 
 
 async def test_tui_enter_always_submits_even_with_the_dropdown_open(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """Regression test: Enter must submit the line, not just silently accept a suggestion."""
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -810,9 +810,9 @@ async def test_tui_enter_always_submits_even_with_the_dropdown_open(
 
 
 async def test_tui_command_input_suggests_meta_commands_after_a_dot(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -828,9 +828,9 @@ async def test_tui_command_input_suggests_meta_commands_after_a_dot(
 
 
 async def test_tui_command_input_tab_completes_a_meta_command_name(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -846,10 +846,10 @@ async def test_tui_command_input_tab_completes_a_meta_command_name(
 
 
 async def test_tui_command_input_suggests_command_names_after_help_completes(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """Regression test: completing ".help" must not swallow the command-name argument slot."""
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         command_input = app.query_one("#command_input", Input)
@@ -865,9 +865,9 @@ async def test_tui_command_input_suggests_command_names_after_help_completes(
 
 
 async def test_tui_sidebar_selection_of_a_zero_argument_command_inserts_the_closed_call(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         list_view = app.query_one("#sidebar", ListView)
@@ -884,10 +884,10 @@ async def test_tui_sidebar_selection_of_a_zero_argument_command_inserts_the_clos
 
 
 async def test_tui_sidebar_selection_of_a_command_with_arguments_opens_completion(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """Only the opening paren is inserted - the rest is the same completion flow as typing it."""
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         list_view = app.query_one("#sidebar", ListView)
@@ -908,10 +908,10 @@ async def test_tui_sidebar_selection_of_a_command_with_arguments_opens_completio
 
 
 async def test_tui_sidebar_selection_of_a_positional_command_shows_the_live_hint_instead(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     """No dropdown for a positional command (nothing to suggest) - the bold hint takes over."""
-    app = IppDmeTui("127.0.0.1", server_port)
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
         list_view = app.query_one("#sidebar", ListView)

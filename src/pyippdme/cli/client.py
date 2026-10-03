@@ -54,6 +54,7 @@ except ImportError:  # pragma: no cover - platforms without readline (e.g. Windo
 from pyippdme.cli.script import run_line, run_script_lines, start_embedded_server
 from pyippdme.cli.session_log import SessionLog
 from pyippdme.client import IppDmeClient
+from pyippdme.protocol.network import TCP_NETWORK
 from pyippdme.server import IppDmeServer
 from pyippdme.simulation.state import SimulationState
 
@@ -82,7 +83,7 @@ async def run(
     embedded_server: IppDmeServer[SimulationState] | None = None
     if virtual:
         host, port, embedded_server = await start_embedded_server()
-        print(f"Started an in-process VirtualCMM on {host}:{port}")
+        print("Started an in-process VirtualCMM")
     assert host is not None  # noqa: S101 (argparse requires host unless --virtual)
 
     peer = f"{host}:{port}"
@@ -93,7 +94,11 @@ async def run(
             else None
         )
         client = await IppDmeClient.connect(
-            host, port, on_line_sent=log.to_server, on_line_received=log.to_client
+            host,
+            port,
+            network=TCP_NETWORK if embedded_server is None else embedded_server.network,
+            on_line_sent=log.to_server,
+            on_line_received=log.to_client,
         )
         log.connected(peer)
         print(f"Connected to {peer}")

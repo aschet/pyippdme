@@ -47,6 +47,9 @@ API Reference
 .. automodule:: pyippdme.protocol.signature
    :members:
 
+.. automodule:: pyippdme.protocol.network
+   :members:
+
 .. automodule:: pyippdme.server.backend
    :members:
 

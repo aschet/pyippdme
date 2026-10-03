@@ -10,9 +10,9 @@ from pyippdme import CommandName, IppDmeClient
 from pyippdme.client.model import IppDmeMachine
 
 
-async def test_on_line_sent_reports_every_command_including_its_tag(server_port: int) -> None:
+async def test_on_line_sent_reports_every_command_including_its_tag(tcp_server_port: int) -> None:
     sent: list[str] = []
-    client = await IppDmeClient.connect("127.0.0.1", server_port, on_line_sent=sent.append)
+    client = await IppDmeClient.connect("127.0.0.1", tcp_server_port, on_line_sent=sent.append)
     try:
         await client.start_session()
         await client.call(CommandName.GET_DME_VERSION)
@@ -23,10 +23,12 @@ async def test_on_line_sent_reports_every_command_including_its_tag(server_port:
 
 
 async def test_on_line_received_reports_every_response_without_the_terminator(
-    server_port: int,
+    tcp_server_port: int,
 ) -> None:
     received: list[str] = []
-    client = await IppDmeClient.connect("127.0.0.1", server_port, on_line_received=received.append)
+    client = await IppDmeClient.connect(
+        "127.0.0.1", tcp_server_port, on_line_received=received.append
+    )
     try:
         await client.start_session()
         await client.call(CommandName.GET_DME_VERSION)
@@ -43,12 +45,12 @@ async def test_on_line_received_reports_every_response_without_the_terminator(
     assert not any(line.endswith("\r") or line.endswith("\n") for line in received)
 
 
-async def test_a_raising_hook_does_not_break_the_connection(server_port: int) -> None:
+async def test_a_raising_hook_does_not_break_the_connection(tcp_server_port: int) -> None:
     def _bad_hook(_text: str) -> None:
         raise RuntimeError("boom")
 
     client = await IppDmeClient.connect(
-        "127.0.0.1", server_port, on_line_sent=_bad_hook, on_line_received=_bad_hook
+        "127.0.0.1", tcp_server_port, on_line_sent=_bad_hook, on_line_received=_bad_hook
     )
     try:
         await client.start_session()
@@ -58,8 +60,8 @@ async def test_a_raising_hook_does_not_break_the_connection(server_port: int) ->
         await client.close()
 
 
-async def test_no_hooks_given_is_the_default_and_works_unchanged(server_port: int) -> None:
-    client = await IppDmeClient.connect("127.0.0.1", server_port)
+async def test_no_hooks_given_is_the_default_and_works_unchanged(tcp_server_port: int) -> None:
+    client = await IppDmeClient.connect("127.0.0.1", tcp_server_port)
     try:
         await client.start_session()
         (version,) = await client.call(CommandName.GET_DME_VERSION)
@@ -68,11 +70,11 @@ async def test_no_hooks_given_is_the_default_and_works_unchanged(server_port: in
         await client.close()
 
 
-async def test_ippdme_machine_connect_forwards_the_same_hooks(server_port: int) -> None:
+async def test_ippdme_machine_connect_forwards_the_same_hooks(tcp_server_port: int) -> None:
     sent: list[str] = []
     received: list[str] = []
     machine = await IppDmeMachine.connect(
-        "127.0.0.1", server_port, on_line_sent=sent.append, on_line_received=received.append
+        "127.0.0.1", tcp_server_port, on_line_sent=sent.append, on_line_received=received.append
     )
     try:
         await machine.start_session()

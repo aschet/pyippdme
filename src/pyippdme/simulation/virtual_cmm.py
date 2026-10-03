@@ -32,6 +32,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 
 from pyippdme.protocol.hooks import LineHook
+from pyippdme.protocol.network import TCP_NETWORK, Network
 from pyippdme.server import IppDmeServer
 from pyippdme.server.backend import MachineBackend
 from pyippdme.server.registry import CommandRegistry, component_name
@@ -113,6 +114,7 @@ class VirtualCMM(IppDmeServer[SimulationState]):
         csy_store: CsyStore | None = None,
         machine_class: str | None = None,
         command_classes: Sequence[Callable[[CommandRegistry], None]] = DEFAULT_COMMAND_CLASSES,
+        network: Network = TCP_NETWORK,
         sample_surface: SampleSurface | None = None,
         on_line_received: LineHook | None = None,
         on_line_sent: LineHook | None = None,
@@ -129,6 +131,7 @@ class VirtualCMM(IppDmeServer[SimulationState]):
             ),
             command_classes=command_classes,
             state_factory=SimulationState,
+            network=network,
             sample_surface=sample_surface,
             on_line_received=on_line_received,
             on_line_sent=on_line_sent,

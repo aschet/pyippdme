@@ -13,12 +13,12 @@ from pyippdme.cli.script import run_script_lines, start_embedded_server
 from pyippdme.client import IppDmeClient
 
 
-async def test_run_script_lines_transcript(server_port: int, tmp_path: Path) -> None:
+async def test_run_script_lines_transcript(tcp_server_port: int, tmp_path: Path) -> None:
     script = tmp_path / "session.iscript"
     script.write_text("# start a session\nStartSession()\n\nGoTo(X(10), Y(20))\nGet(X(), Y())\n")
     output = io.StringIO()
 
-    client = await IppDmeClient.connect("127.0.0.1", server_port)
+    client = await IppDmeClient.connect("127.0.0.1", tcp_server_port)
     try:
         await run_script_lines(client, script, output)
     finally:
@@ -42,7 +42,7 @@ async def test_run_script_lines_against_an_embedded_virtualcmm(tmp_path: Path) -
 
     host, port, server = await start_embedded_server()
     try:
-        client = await IppDmeClient.connect(host, port)
+        client = await IppDmeClient.connect(host, port, network=server.network)
         try:
             await run_script_lines(client, script, output)
         finally:
@@ -54,13 +54,13 @@ async def test_run_script_lines_against_an_embedded_virtualcmm(tmp_path: Path) -
 
 
 async def test_run_script_lines_reports_parse_and_server_errors(
-    server_port: int, tmp_path: Path
+    tcp_server_port: int, tmp_path: Path
 ) -> None:
     script = tmp_path / "session.iscript"
     script.write_text("StartSession()\nnot a valid method call!!\nGetSupportedArguments(1)\n")
     output = io.StringIO()
 
-    client = await IppDmeClient.connect("127.0.0.1", server_port)
+    client = await IppDmeClient.connect("127.0.0.1", tcp_server_port)
     try:
         await run_script_lines(client, script, output)
     finally:
@@ -72,7 +72,7 @@ async def test_run_script_lines_reports_parse_and_server_errors(
 
 
 async def test_run_script_lines_continues_after_server_error(
-    server_port: int, tmp_path: Path
+    tcp_server_port: int, tmp_path: Path
 ) -> None:
     script = tmp_path / "session.iscript"
     script.write_text(
@@ -80,7 +80,7 @@ async def test_run_script_lines_continues_after_server_error(
     )
     output = io.StringIO()
 
-    client = await IppDmeClient.connect("127.0.0.1", server_port)
+    client = await IppDmeClient.connect("127.0.0.1", tcp_server_port)
     try:
         await run_script_lines(client, script, output)
     finally:
@@ -92,14 +92,14 @@ async def test_run_script_lines_continues_after_server_error(
 
 
 async def test_run_script_lines_reuses_an_already_connected_client(
-    server_port: int, tmp_path: Path
+    tcp_server_port: int, tmp_path: Path
 ) -> None:
     """The .run meta-command's engine: same transcript, but no new connection is opened."""
     script = tmp_path / "session.iscript"
     script.write_text("StartSession()\nGoTo(X(10), Y(20))\nGet(X(), Y())\n")
     output = io.StringIO()
 
-    client = await IppDmeClient.connect("127.0.0.1", server_port)
+    client = await IppDmeClient.connect("127.0.0.1", tcp_server_port)
     try:
         ok = await run_script_lines(client, script, output)
         assert ok is True

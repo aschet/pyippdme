@@ -72,6 +72,7 @@ from pyippdme.cli._interaction import (
     run_command_line,
 )
 from pyippdme.client import IppDmeClient
+from pyippdme.protocol.network import MemoryNetwork
 from pyippdme.server import IppDmeServer
 from pyippdme.simulation.state import SimulationState
 
@@ -92,8 +93,16 @@ def _strip_leading_tag(text: str) -> str:
     return _LEADING_TAG_RE.sub("", text, count=1)
 
 
+#: The host name a connection to an in-process VirtualCMM uses; it only has
+#: meaning on that server's own :class:`~pyippdme.protocol.network.MemoryNetwork`.
+VIRTUAL_HOST = "virtual"
+
+
 async def start_embedded_server() -> tuple[str, int, IppDmeServer[SimulationState]]:
     """Start an in-process VirtualCMM; return ``(host, port, server)`` to connect to it.
+
+    The server listens on its own in-memory network (no TCP port is opened);
+    connect with ``network=server.network``.
 
     Used by ``ippdme client --virtual`` (see :mod:`pyippdme.cli.client`);
     ``ippdme tui --virtual`` has its own separate copy of this (see
@@ -102,9 +111,9 @@ async def start_embedded_server() -> tuple[str, int, IppDmeServer[SimulationStat
     """
     from pyippdme.simulation.virtual_cmm import VirtualCMM
 
-    server = VirtualCMM()
+    server = VirtualCMM(network=MemoryNetwork())
     port = await server.start()
-    return "127.0.0.1", port, server
+    return VIRTUAL_HOST, port, server
 
 
 async def run_script_lines(

@@ -138,9 +138,9 @@ def test_no_subcommand_errors() -> None:
 
 
 async def test_run_line_send_and_receive(
-    server_port: int, capsys: pytest.CaptureFixture[str]
+    tcp_server_port: int, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    client = await IppDmeClient.connect("127.0.0.1", server_port)
+    client = await IppDmeClient.connect("127.0.0.1", tcp_server_port)
     try:
         assert await run_line(client, "StartSession()", sys.stdout) is True
         out = capsys.readouterr().out
@@ -155,9 +155,9 @@ async def test_run_line_send_and_receive(
 
 
 async def test_run_line_reports_server_errors(
-    server_port: int, capsys: pytest.CaptureFixture[str]
+    tcp_server_port: int, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    client = await IppDmeClient.connect("127.0.0.1", server_port)
+    client = await IppDmeClient.connect("127.0.0.1", tcp_server_port)
     try:
         await run_line(client, "GetDMEVersion()", sys.stdout)  # no session yet -> 0008
         assert "0008" in capsys.readouterr().out
@@ -165,8 +165,10 @@ async def test_run_line_reports_server_errors(
         await client.close()
 
 
-async def test_run_line_parse_error(server_port: int, capsys: pytest.CaptureFixture[str]) -> None:
-    client = await IppDmeClient.connect("127.0.0.1", server_port)
+async def test_run_line_parse_error(
+    tcp_server_port: int, capsys: pytest.CaptureFixture[str]
+) -> None:
+    client = await IppDmeClient.connect("127.0.0.1", tcp_server_port)
     try:
         await run_line(client, "not a valid method call!!", sys.stdout)
         assert "Parse error" in capsys.readouterr().out
@@ -177,10 +179,10 @@ async def test_run_line_parse_error(server_port: int, capsys: pytest.CaptureFixt
 async def test_start_embedded_server_gives_a_working_virtualcmm() -> None:
     host, port, server = await script.start_embedded_server()
     try:
-        assert host == "127.0.0.1"
+        assert host == script.VIRTUAL_HOST
         assert server.port == port
 
-        dme_client = await IppDmeClient.connect(host, port)
+        dme_client = await IppDmeClient.connect(host, port, network=server.network)
         try:
             await dme_client.start_session()
             (data,) = await dme_client.call(CommandName.GET_MACHINE_CLASS)
@@ -206,17 +208,17 @@ def _fake_input(lines: list[str]) -> object:
 
 
 async def test_client_run_interactive_end_to_end(
-    server_port: int, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tcp_server_port: int, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(
         "builtins.input",
         _fake_input(["StartSession()", "GetDMEVersion()"]),
     )
 
-    await client.run("127.0.0.1", server_port)  # then EOFError from _fake_input ends the loop
+    await client.run("127.0.0.1", tcp_server_port)  # then EOFError from _fake_input ends the loop
 
     out = capsys.readouterr().out
-    assert f"Connected to 127.0.0.1:{server_port}" in out
+    assert f"Connected to 127.0.0.1:{tcp_server_port}" in out
     assert '"2.5"' in out
 
 
@@ -235,18 +237,20 @@ async def test_client_run_with_virtual_starts_and_tears_down_its_own_server(
     assert "_VirtualCMM" in out
 
 
-async def test_client_run_exits_on_eof(server_port: int, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_client_run_exits_on_eof(
+    tcp_server_port: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def _raise_eof(prompt: str = "") -> str:
         del prompt
         raise EOFError
 
     monkeypatch.setattr("builtins.input", _raise_eof)
 
-    await client.run("127.0.0.1", server_port)  # must return, not hang or raise
+    await client.run("127.0.0.1", tcp_server_port)  # must return, not hang or raise
 
 
 async def test_client_run_exits_on_keyboard_interrupt(
-    server_port: int, monkeypatch: pytest.MonkeyPatch
+    tcp_server_port: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def _raise_interrupt(prompt: str = "") -> str:
         del prompt
@@ -254,16 +258,16 @@ async def test_client_run_exits_on_keyboard_interrupt(
 
     monkeypatch.setattr("builtins.input", _raise_interrupt)
 
-    await client.run("127.0.0.1", server_port)  # must return, not hang or raise
+    await client.run("127.0.0.1", tcp_server_port)  # must return, not hang or raise
 
 
 async def test_client_run_with_file_runs_it_non_interactively(
-    server_port: int, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tcp_server_port: int, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     script = tmp_path / "session.iscript"
     script.write_text("StartSession()\nGoTo(X(10), Y(20))\nGet(X(), Y())\n")
 
-    await client.run("127.0.0.1", server_port, script=script)
+    await client.run("127.0.0.1", tcp_server_port, script=script)
 
     out = capsys.readouterr().out
     assert "> StartSession()" in out
@@ -284,13 +288,13 @@ async def test_client_run_with_file_and_virtual(
 
 
 async def test_client_run_session_log_records_wire_traffic_and_connection_events(
-    server_port: int, tmp_path: Path
+    tcp_server_port: int, tmp_path: Path
 ) -> None:
     script = tmp_path / "session.iscript"
     script.write_text("StartSession()\nGetDMEVersion()\n")
     log_path = tmp_path / "session.log"
 
-    await client.run("127.0.0.1", server_port, script=script, session_log=str(log_path))
+    await client.run("127.0.0.1", tcp_server_port, script=script, session_log=str(log_path))
 
     logged = log_path.read_text()
     assert "CONNECTED" in logged
@@ -300,24 +304,24 @@ async def test_client_run_session_log_records_wire_traffic_and_connection_events
 
 
 async def test_client_run_commands_file_records_interactively_typed_commands(
-    server_port: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tcp_server_port: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("builtins.input", _fake_input(["StartSession()", "GetDMEVersion()"]))
     commands_path = tmp_path / "commands.txt"
 
-    await client.run("127.0.0.1", server_port, commands_file=str(commands_path))
+    await client.run("127.0.0.1", tcp_server_port, commands_file=str(commands_path))
 
     assert commands_path.read_text().splitlines() == ["StartSession()", "GetDMEVersion()"]
 
 
 async def test_client_run_commands_file_records_commands_from_a_script(
-    server_port: int, tmp_path: Path
+    tcp_server_port: int, tmp_path: Path
 ) -> None:
     script = tmp_path / "session.iscript"
     script.write_text("# a comment, not a command\nStartSession()\n\nGetDMEVersion()\n")
     commands_path = tmp_path / "commands.txt"
 
-    await client.run("127.0.0.1", server_port, script=script, commands_file=str(commands_path))
+    await client.run("127.0.0.1", tcp_server_port, script=script, commands_file=str(commands_path))
 
     # Comments/blanks from the source script are not recorded, only real commands.
     assert commands_path.read_text().splitlines() == ["StartSession()", "GetDMEVersion()"]
