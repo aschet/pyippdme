@@ -524,6 +524,18 @@ builds the command lines of the dialogs, `pyippdme.client.commandform` the forms
 commands, and `pyippdme.client.optical` reads a sensor and acquires points; use them to put
 another interface on the client.
 
+### 3D rendering
+
+On a desktop the 3D view draws with OpenGL: the meshes are uploaded to the graphics card once and
+drawn with their pose, so orbiting the camera and moving the machine stay smooth even with a
+heavy part (about 14 times faster than the software renderer in a test with 86,000 triangles
+and a CPU-only OpenGL; a real graphics card is faster still). It needs nothing beyond PySide6.
+If no OpenGL context can be made (a remote desktop, the offscreen platform used in CI, a driver
+that fails to compile the shaders) the view falls back to a software renderer that projects and
+sorts the triangles with numpy. **View > OpenGL rendering** switches between them, and the
+environment variable `PYIPPDME_RENDERER` (`auto`, `gl` or `software`) sets the default. The
+corner of the view names the renderer in use.
+
 ### Coordinate systems
 
 The **Coordinates** tab lists the chain of 6.5.1 (`MachineCsy`, ..., `PartCsy`) with what the
