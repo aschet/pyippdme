@@ -35,7 +35,7 @@ genuinely fixed-shape command.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 from pyippdme.protocol.ast import (
     BasicName,
@@ -52,6 +52,7 @@ from pyippdme.protocol.commands import CommandName
 from pyippdme.protocol.parameters import ParameterName
 from pyippdme.protocol.signature import Parameter
 from pyippdme.types.csy import CoordinateTransform
+from pyippdme.types.vec3 import Vec3
 
 # ---------------------------------------------------------------------------
 # Generic building blocks - not tied to any one command, and the ones a
@@ -244,6 +245,29 @@ def get_raw_data_file(url: str) -> Items:
 def key_press(name: str) -> Items:
     """``KeyPress(NameOfKey)``: a key was pressed on the jog box (5.5.3)."""
     return Items((NamedValue("KeyPress", (String(name),)),))
+
+
+def data_acquire_event(
+    acq_name: str,
+    acquisition_type: str,
+    settings_name: str,
+    points: Sequence[tuple[Vec3, Vec3, Vec3]] = (),
+) -> Items:
+    """``DataAcquire(...)``: the user took a measurement at the machine (6.15, use case 2).
+
+    Each point is a position, the primary and the secondary direction (see ``AlignTool``).
+    """
+    numbers = [
+        v for position, primary, secondary in points for v in (*position, *primary, *secondary)
+    ]
+    arguments: tuple[Number | String | BasicName, ...] = (
+        String(acq_name),
+        BasicName(acquisition_type),
+        String(settings_name),
+        Number.of(len(points)),
+        *(Number.of(v) for v in numbers),
+    )
+    return Items((NamedValue("DataAcquire", arguments),))
 
 
 def _report_event(name: str, **values: float | tuple[float, ...]) -> Items:

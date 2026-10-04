@@ -128,6 +128,7 @@ SUMMARIES: dict[str, str] = {
     # Optical and raw data
     "DataAcquire": "Take a measurement with the optical tool and store it under a name.",
     "DeleteAcquistion": "Delete one stored acquisition.",
+    "DeleteAcquisition": "The same command as DeleteAcquistion (the other spelling).",
     "DeleteAllAcquisitions": "Delete all stored acquisitions.",
     "AdvDataStruct": "Select the advanced data structure for acquisition results.",
     "RawDataBinSetup": "Set up the binary channel on which raw data is delivered.",
@@ -136,6 +137,9 @@ SUMMARIES: dict[str, str] = {
     "ReleaseShaMem": "Free the shared memory that holds an acquisition's raw data.",
     "GetRawDataFile": "Give the file in which an acquisition's raw data was stored.",
     "DelRawDataFile": "Delete the raw data file of an acquisition.",
+    # The deprecated class of regions and extraction
+    "ROI": "Define a named region of interest for FeatureExtract (deprecated).",
+    "FeatureExtract": "Fit a feature to the points of stored acquisitions inside regions of interest (deprecated).",
     # Form tester
     "CenterPart": "Centre a part on the form tester's rotary axis.",
     "TiltPart": "Tilt a part so that an axis is square to the rotary axis.",
@@ -177,6 +181,16 @@ NOTES: dict[str, str] = {
     ),
     "ScanOnCurve": "The data is a list of points and directions in the given Format.",
     "ChangeTool": "The machine drives to the rack, puts the old module back and takes the new one.",
+    "ROI": (
+        'ROI("Name", Circle(...), include): the shape is a Line, Circle, Polygon2D, Cylinder, '
+        "Sphere, Polygon3D or, relative to the feature, CircleRel, CylinderRel or SphereRel. "
+        "include or exclude says whether the points inside count or not."
+    ),
+    "FeatureExtract": (
+        "Acqs lists the acquisitions, the feature (Point, Line, Circle or Cylinder) gives the "
+        "nominal position and direction, ROIs the regions. The report is GeoElem() for the fitted "
+        "element or QEPs(S(step)) for the points that were used. The class is deprecated."
+    ),
     "DataAcquire": (
         "The result is delivered through the raw data commands. Type says whether it is a point, "
         "a line or an area."
@@ -201,6 +215,8 @@ EXAMPLES: dict[str, str] = {
     "SetCsyTransformation": "SetCsyTransformation(PartCsy,100,50,0,0,0,30)",
     "SaveActiveCoordSystem": 'SaveActiveCoordSystem("fixture-1")',
     "ChangeTool": 'ChangeTool("Probe 3mm")',
+    "ROI": 'ROI("Around", Circle(50,40,5,0,0,1,1,0,0,15), include)',
+    "FeatureExtract": 'FeatureExtract(Acqs("Ring"),Circle(50,40,5,0,0,1,1,0,0,10),ROIs("Around"),"S",GeoElem())',
     "ScanOnLine": "ScanOnLine(0,0,0,50,0,0,0,0,1,1)",
     "ScanOnCircle": "ScanOnCircle(0,0,0,10,0,0,0,0,1,360,0,2)",
     "GetErrorInfo": "GetErrorInfo(1006)",
@@ -428,6 +444,8 @@ RETURNS: dict[str, str] = {
             "UseSmallestAngletoAlignTool",
             "UseSmallestAngleToAlignTool",
             "DeleteAcquistion",
+            "DeleteAcquisition",
+            "ROI",
             "DeleteAllAcquisitions",
             "ReleaseShaMem",
             "DelRawDataFile",
@@ -488,4 +506,5 @@ RETURNS: dict[str, str] = {
     "GetRawDataBin": "The raw data, over the binary channel set up with RawDataBinSetup.",
     "GetRawDataShaMem": "Where the raw data is in shared memory: offset and size.",
     "GetRawDataFile": "The URL of the file with the raw data.",
+    "FeatureExtract": "With GeoElem the fitted element, written like its own definition; with QEPs the points used.",
 }

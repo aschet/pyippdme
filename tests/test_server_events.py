@@ -161,3 +161,27 @@ def test_parse_event_keeps_unknown_events() -> None:
     assert parse_event(unknown) == UnknownEvent(unknown.data)
     two = _response(NamedValue("KeyPress", (String("a"),)), NamedValue("KeyPress", (String("b"),)))
     assert isinstance(parse_event(two), UnknownEvent)
+
+
+async def test_a_measurement_taken_at_the_machine_reaches_the_client_as_data_acquire(
+    virtual: tuple[VirtualCMM, IppDmeMachine],
+) -> None:
+    from pyippdme.client.events import DataAcquireRequested
+
+    server, machine = virtual
+    await machine.mover.enable_user()
+    path = (
+        ((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (1.0, 0.0, 0.0)),
+        ((5.0, 0.0, 0.0), (0, 0, 1.0), (1.0, 0, 0)),
+    )
+    assert await server.data_acquire("Rear_456", "MultiShot", "Settings", path) is True
+    event = await _next(machine)
+    assert isinstance(event, DataAcquireRequested)
+    assert (event.acq_name, event.acquisition_type, event.settings_name) == (
+        "Rear_456",
+        "MultiShot",
+        "Settings",
+    )
+    assert event.positions[1][0] == (5.0, 0.0, 0.0)
+    await machine.mover.disable_user()
+    assert await server.data_acquire("X", "SingleShot", "S") is False

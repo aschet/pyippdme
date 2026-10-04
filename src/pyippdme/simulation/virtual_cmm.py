@@ -219,6 +219,24 @@ class VirtualCMM(IppDmeServer[SimulationState]):
         activate_tool(self._context(state), tool_name)
         return await self.send_event(server_builders.tool_changed(tool_name))
 
+    async def data_acquire(
+        self,
+        acq_name: str,
+        acquisition_type: str,
+        settings_name: str,
+        points: Sequence[tuple[Vec3, Vec3, Vec3]] = (),
+    ) -> bool:
+        """Take a measurement at the machine: the client gets ``DataAcquire(...)`` (6.15).
+
+        Like the other unsolicited events it is sent only while the user is enabled.
+        """
+        state = self.active_state
+        if state is None or not state.mover.user_enabled:
+            return False
+        return await self.send_event(
+            server_builders.data_acquire_event(acq_name, acquisition_type, settings_name, points)
+        )
+
     async def open_tool_collection(self, path: str) -> bool:
         """Open a tool collection at the machine: the client gets ``OpenToolCollection(path)``."""
         state = self.active_state

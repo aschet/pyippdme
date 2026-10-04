@@ -211,6 +211,7 @@ _EXPECTED_POSITIONAL_COMMANDS = frozenset(
         CommandName.ALIGN_TOOL,
         CommandName.USE_SMALLEST_ANGLE_TO_ALIGN_TOOL,
         "UseSmallestAngleToAlignTool",  # the other spelling in the standard
+        "DeleteAcquisition",  # the other spelling in the standard
         CommandName.CENTER_PART,
         CommandName.TILT_PART,
         CommandName.TILT_CENTER_PART,

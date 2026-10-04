@@ -151,6 +151,7 @@ COMMAND_GROUPS: dict[str, tuple[str, ...]] = {
     "Optical and raw data": (
         "DataAcquire",
         "DeleteAcquistion",
+        "DeleteAcquisition",
         "DeleteAllAcquisitions",
         "AdvDataStruct",
         "RawDataBinSetup",
@@ -160,6 +161,7 @@ COMMAND_GROUPS: dict[str, tuple[str, ...]] = {
         "GetRawDataFile",
         "DelRawDataFile",
     ),
+    "Features (deprecated)": ("ROI", "FeatureExtract"),
     "Form tester": ("CenterPart", "TiltPart", "TiltCenterPart"),
 }
 

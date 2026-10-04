@@ -37,6 +37,7 @@ register them on your own :class:`~pyippdme.server.IppDmeServer` instance.
 
 from pyippdme.server.classes import register_dme_class, register_server_class
 from pyippdme.simulation.classes.cartcmm_class import register as register_cartcmm_class
+from pyippdme.simulation.classes.feature_class import register as register_feature_class
 from pyippdme.simulation.classes.formtester_class import register as register_formtester_class
 from pyippdme.simulation.classes.mover_class import register as register_mover_class
 from pyippdme.simulation.classes.part_class import register as register_part_class
@@ -49,6 +50,7 @@ from pyippdme.simulation.classes.toolchanger_class import register as register_t
 __all__ = [
     "register_cartcmm_class",
     "register_dme_class",
+    "register_feature_class",
     "register_formtester_class",
     "register_mover_class",
     "register_part_class",

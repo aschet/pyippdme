@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from multiprocessing.shared_memory import SharedMemory
 from pathlib import Path
+from typing import Any
 
 from pyippdme.protocol.ast import EventTag
 from pyippdme.server.registry import MachineState
@@ -177,6 +178,13 @@ class PartState:
 
 
 @dataclass(slots=True)
+class FeatureState:
+    """State of the deprecated ``FeatureExtraction`` class: the regions of interest by name."""
+
+    rois: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class SimulationState(MachineState):
     """Per-connection state for every bundled simulated command class.
 
@@ -196,6 +204,7 @@ class SimulationState(MachineState):
     rotary_table: RotaryTableState = field(default_factory=RotaryTableState)
     raw_data: RawDataState = field(default_factory=RawDataState)
     part: PartState = field(default_factory=PartState)
+    features: FeatureState = field(default_factory=FeatureState)
 
     def carry_over_from(self, previous: MachineState) -> None:
         """Keep what the machine keeps between clients (6.3.1).
