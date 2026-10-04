@@ -108,6 +108,7 @@ from pyippdme.client.interaction import (
     format_error,
     run_command_line,
 )
+from pyippdme.client.reference import CommandReference, MetaCommands
 from pyippdme.exceptions import IppDmeConnectionError
 from pyippdme.protocol.network import TCP_NETWORK, MemoryNetwork
 from pyippdme.protocol.transport import DEFAULT_PORT
@@ -117,9 +118,11 @@ from pyippdme.simulation.state import SimulationState
 
 _IDENTIFIER_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*$")
 
-#: The only meta-commands :meth:`IppDmeTui._meta_command` recognizes; kept
-#: in sync with it by hand since there's only the one.
-_META_COMMANDS = ("help",)
+#: The meta-commands :meth:`IppDmeTui._meta_command` recognizes: the same ones as the simple shell
+#: (:class:`~pyippdme.client.reference.MetaCommands`).
+_META_COMMANDS = tuple(name for name, _, _ in MetaCommands.COMMANDS)
+#: Meta-commands whose argument is not a command name, so the dropdown has nothing to offer there.
+_META_WITHOUT_COMMAND_ARGUMENT = (".cmds ", ".quit", ".exit")
 _META_COMMAND_PREFIX_RE = re.compile(r"^\.([A-Za-z]*)$")
 
 
@@ -138,6 +141,8 @@ def _completion_candidates(state: TargetState) -> list[DropdownItem]:
         # below exactly like a bare command name would).
         needle = meta_prefix.group(1).casefold()
         return [DropdownItem(name) for name in _META_COMMANDS if name.casefold().startswith(needle)]
+    if prefix.startswith(_META_WITHOUT_COMMAND_ARGUMENT):
+        return []
     command_name, partial = completion_context(prefix)
     if command_name is None and not partial:
         # Nothing typed and not inside any command's parens: offering all
@@ -155,8 +160,7 @@ def _completion_candidates(state: TargetState) -> list[DropdownItem]:
     return [DropdownItem(name) for name in names if name.casefold().startswith(needle)]
 
 
-_HELP_PLACEHOLDER = "Highlight a command in the list, or type .help <name>, to see its arguments."
-_HELP_USAGE = "Usage: .help <command name>"
+_HELP_PLACEHOLDER = "Highlight a command in the list, or type .man <name>, to see its arguments."
 
 
 def _find_command_name(query: str) -> str | None:
@@ -441,6 +445,7 @@ class IppDmeTui(App[None]):
         #: Previously submitted commands, oldest first (see :meth:`on_key`'s
         #: Up/Down cycling, mirroring shell command history).
         self._history: list[str] = []
+        self._meta = MetaCommands(CommandReference())
         #: Index into ``_history`` while cycling, or ``None`` when not.
         self._history_index: int | None = None
         #: What the user had typed before they started cycling, restored on
@@ -640,29 +645,29 @@ class IppDmeTui(App[None]):
             await self._send(text)
 
     def _meta_command(self, command: str) -> None:
-        """Handle a ``.``-prefixed input - currently just ``.help [command name]``.
+        """Handle a ``.``-prefixed input: ``.help``, ``.cmds``, ``.man`` and ``.quit``.
 
-        Echoed to the main log like any other typed input, in addition to
-        updating the signature panel - the panel alone isn't where anyone
-        watching the log for a response to what they just typed would
-        think to look.
+        Echoed to the main log like any other typed input; never sent to the server. A command
+        asked for with ``.man`` (or ``.help <command>``, which is the same) also fills the
+        signature panel with its arguments.
         """
         self._append_log(f"[bold]> .{escape_markup(command)}[/bold]")
         parts = command.split()
-        name = parts[0].lower() if parts else ""
-        if name == "help":
-            # _format_signature() already returns safe Rich markup (its
-            # own literal "[float]"-style brackets pre-escaped, its bold
-            # highlight a real [bold]/[/bold] pair) - escaping it again
-            # here would double-escape the former and neuter the latter.
-            # _HELP_USAGE has no brackets of its own, so it's unaffected
-            # either way.
-            text = _format_signature(parts[1]) if len(parts) > 1 else _HELP_USAGE
+        name = parts[0].lower() if parts else "help"
+        if name in ("quit", "exit", "q"):
+            self.exit()
+            return
+        if name in ("help", "man") and len(parts) > 1:
+            # _format_signature() already returns safe Rich markup (its own literal "[float]"-style
+            # brackets pre-escaped, its bold highlight a real [bold]/[/bold] pair): escaping it
+            # again would double-escape the former and neuter the latter.
+            text = _format_signature(parts[1])
             self.query_one("#signature_text", Static).update(text)
             self.query_one("#signature_panel", VerticalScroll).scroll_home(animate=False)
-            self._append_log(text)
-        else:
-            self._append_log(f"[red]Unknown meta-command: .{escape_markup(command)}[/red]")
+            command = f"man {parts[1]}"
+        result = self._meta.run(f".{command}")
+        if result.text:
+            self._append_log(escape_markup(result.text))
 
     def on_key(self, event: events.Key) -> None:
         command_input = self.query_one("#command_input", Input)

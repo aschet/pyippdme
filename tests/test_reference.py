@@ -76,7 +76,7 @@ def test_meta_commands_help_cmds_man_quit() -> None:
     assert "GoTo -" in meta.run(".man GoTo").text
     assert "Did you mean" in meta.run(".man GoT").text
     assert meta.run(".man").text.startswith("Usage")
-    assert meta.run(".nope").text.startswith("Unknown meta command")
+    assert meta.run(".nope").text.startswith("Unknown meta-command")
     assert meta.run(".quit").quit
     assert meta.run(".exit").quit
     assert not meta.run(".help").quit

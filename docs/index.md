@@ -569,7 +569,7 @@ Tabs cycle through the matches in place (Shift+Tab goes back), with no list or p
 uses the standard library's `readline`, so it is on where that exists (Linux; macOS lists the
 matches instead). Ctrl+D quits, and the shell says so when it starts.
 
-The shell also has meta commands, which start with a dot and are not sent to the server:
+The shell (and the full-screen `ippdme tui`, which has the same dot commands and a dropdown for them) also has meta commands, which start with a dot and are not sent to the server:
 `.help` lists them, `.cmds [group]` lists the commands by task, `.man <command>` prints what a
 command does, its arguments with their types (`*` marks an optional one, bare values are written
 in order without their names), what it returns and an example, and `.quit` leaves (Ctrl+D does

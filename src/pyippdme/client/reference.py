@@ -304,7 +304,7 @@ class MetaCommands:
             if not args:
                 return MetaResult("Usage: .man <command>   (.cmds lists the commands)")
             return MetaResult(self.reference.manual(args[0]))
-        return MetaResult(f"Unknown meta command .{name}. Try .help")
+        return MetaResult(f"Unknown meta-command .{name}. Try .help")
 
     def help_text(self) -> str:
         """Return the list of meta commands."""
