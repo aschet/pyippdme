@@ -432,8 +432,8 @@ def apply_tool_orientation(
     tool_name = _require_alignable(ctx.state.tool.active_name, cause)
     if c is not None:
         raise ServerError(
-            ErrorSeverity.CRITICAL,
-            ErrorCode.ARGUMENT_NOT_SUPPORTED,
+            ErrorSeverity.FATAL,
+            ErrorCode.ANGLES_NOT_SUPPORTED,
             cause,
             "Tool.C is not supported: the tool has only the rotation axes A and B",
         )
@@ -516,6 +516,7 @@ _NAMED_TOOL_PROPERTIES = (
     "AvrOffsets",
     "CollisionVolume",
     "AlignmentVolume",
+    "AdvDataStruct",
 )
 
 
@@ -540,6 +541,11 @@ def _try_get_named_tool_property(ctx: Ctx, arg: NamedValue) -> NamedValue | None
             )
         return None  # Collection/LastQualified/Alignment: e.g. FoundTool.* before FindTool()
     tool_name = maybe_tool_name
+    if leaf == "AdvDataStruct":
+        # 6.17.2 names the property form: GetProp(Tool.AdvDataStruct()) is the command's answer.
+        from pyippdme.simulation.classes.rawdata_class import adv_data_struct_xml
+
+        return NamedValue(arg.name, (), adv_data_struct_xml())
     if leaf == "Collection":
         return NamedValue(
             arg.name, (String(ctx.state.tool.open_collection or DEFAULT_TOOL_COLLECTION),)

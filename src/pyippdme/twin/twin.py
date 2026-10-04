@@ -87,6 +87,8 @@ Listener = Callable[["TwinEvent"], None]
 
 #: A steel sample: 11.5 um/m/K.
 STEEL_CTE = 11.5e-6
+#: Expansion of the glass-ceramic scales of the machine, per kelvin.
+SCALE_CTE = 8.0e-6
 _FRAME = 1.0 / 60.0
 #: Seconds a stylus-module change takes at the rack (TP20 modules: about 6 s with the moves).
 _MODULE_CHANGE_DWELL = 2.0
@@ -296,6 +298,11 @@ class DigitalTwin:
         self.noise_enabled = True
         #: Part temperature in degrees Celsius; 20 is the reference (no thermal error).
         self.temperature = 20.0
+        #: Air temperature in the room; the scales of the machine follow it.
+        self.ambient_temperature = 20.0
+        #: Linear expansion of the part and of the machine scales, per kelvin.
+        self.part_cte = STEEL_CTE
+        self.scale_cte = SCALE_CTE
         #: Whether an unqualified tool carries a systematic error (and ``ReQualify`` is needed).
         self.require_qualification = True
         #: Safety: emergency stop pressed, and whether the air supply is within range.
@@ -653,10 +660,7 @@ class DigitalTwin:
         """Raise the protocol error for a machine that must not move or measure now."""
         if self.estop:
             raise ServerError(
-                ErrorSeverity.CRITICAL,
-                ErrorCode.MACHINE_IN_ERROR_STATE,
-                cause,
-                "Emergency stop is active",
+                ErrorSeverity.CRITICAL, ErrorCode.EMERGENCY_STOP, cause, "Emergency stop is active"
             )
         if not self.air_ok:
             raise ServerError(
@@ -879,16 +883,44 @@ class DigitalTwin:
         if self.noise_enabled:
             placement = self.placement(self._pos, name)
             point = self._apply_probe_errors(point, unit, spec, placement)
-        drift = STEEL_CTE * (self.temperature - 20.0)
-        if drift and obj is not None:
-            ref = obj.pose[:3, 3]
-            point = (
-                point[0] + drift * (point[0] - ref[0]),
-                point[1] + drift * (point[1] - ref[1]),
-                point[2] + drift * (point[2] - ref[2]),
-            )
+        point = self.apply_thermal(point, obj)
         self.record_contact(point, mode or spec.mode)
         return point
+
+    def apply_thermal(self, point: Vec3, obj: SceneObject | None) -> Vec3:
+        """Return ``point`` as the machine reports it with its thermal errors (6.5.2, 6.24.2).
+
+        The part grows with its own temperature about its origin; the server undoes that with the
+        ``Part.Temperature`` and ``Part.XpanCoefficient`` the client set (the coefficient is zero
+        until it does). The scales grow with the room temperature and read short; the server
+        corrects them with the scale temperatures it knows (``UpdateScaleTemperatures``,
+        ``SetScaleTemperatures``; 20 until then).
+        """
+        state = self.state
+        x, y, z = point
+        if obj is not None:
+            ref = obj.pose[:3, 3]
+            grown = 1.0 + self.part_cte * (self.temperature - 20.0)
+            known_temperature = 20.0
+            known_cte = 0.0
+            if state is not None:
+                known_temperature = state.part.properties.get("Part.Temperature", 20.0)
+                known_cte = state.part.properties.get("Part.XpanCoefficient", 0.0) * 1e-6
+            factor = grown / (1.0 + known_cte * (known_temperature - 20.0))
+            if abs(factor - 1.0) > 1e-12:
+                x, y, z = (
+                    float(ref[0]) + (x - ref[0]) * factor,
+                    float(ref[1]) + (y - ref[1]) * factor,
+                    float(ref[2]) + (z - ref[2]) * factor,
+                )
+        scales = []
+        for value, axis in zip((x, y, z), "XYZ", strict=True):
+            known = state.mover.scale_temperatures.get(axis, 20.0) if state is not None else 20.0
+            shrunk = (1.0 + self.scale_cte * (known - 20.0)) / (
+                1.0 + self.scale_cte * (self.ambient_temperature - 20.0)
+            )
+            scales.append(value * shrunk)
+        return (scales[0], scales[1], scales[2])
 
     def _apply_probe_errors(
         self, point: Vec3, unit: Vec3, spec: ToolSpec, placement: ToolPlacement
@@ -1204,14 +1236,7 @@ class DigitalTwin:
         if self.noise_enabled:
             measured = self._apply_probe_errors(measured, unit, spec, self.placement(centre, name))
         obj = hit[2]
-        drift = STEEL_CTE * (self.temperature - 20.0)
-        if drift and obj is not None:
-            ref = obj.pose[:3, 3]
-            measured = (
-                measured[0] + drift * (measured[0] - ref[0]),
-                measured[1] + drift * (measured[1] - ref[1]),
-                measured[2] + drift * (measured[2] - ref[2]),
-            )
+        measured = self.apply_thermal(measured, obj)
         self.record_contact(measured, spec.mode)
         rest = start if request.retract < 0 else add(centre, scale(unit, request.retract))
         # The retract runs at the GoTo speed (Figure 29: the speed goes negative up to V_goto).

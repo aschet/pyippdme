@@ -154,6 +154,21 @@ class RadiusProvider(Protocol):
 
 
 @runtime_checkable
+class TemperatureProvider(Protocol):
+    """Optional part of a :class:`MotionModel`: the temperatures the machine really has.
+
+    The temperature sensors of 6.5.2 (``ReadTemperatureSensor``, ``ReadAllTemperatures``) and
+    ``UpdateScaleTemperatures`` read them. Without it the sensors answer from what the client set.
+    """
+
+    def part_temperature(self) -> float: ...
+
+    def ambient_temperature(self) -> float: ...
+
+    def scale_temperature(self, axis: str) -> float: ...
+
+
+@runtime_checkable
 class MotionModel(Protocol):
     """Carries out a move; returns the position the tool centre point ends at."""
 

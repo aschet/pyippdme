@@ -313,8 +313,10 @@ async def test_tool_c_is_not_supported_by_a_tool_with_two_rotation_axes(
 ) -> None:
     await _use_align_probe(started_client)
     with pytest.raises(IppDmeServerError) as excinfo:
-        await started_client.call(CommandName.GO_TO, NamedValue("Tool.C", (Number.of(10.0),)))
-    assert excinfo.value.error.number == "0506"
+        await started_client.call(
+            CommandName.GO_TO, NamedValue("Tool.C", (Number.of(10.0),))
+        )  # three angles on a two-axis head
+    assert excinfo.value.error.number == "1004"
 
 
 async def test_step_does_not_take_tool_alignment(started_client: IppDmeClient) -> None:

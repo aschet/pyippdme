@@ -117,7 +117,7 @@ async def test_emergency_stop_and_air_pressure_stop_the_machine_and_lose_the_ref
 ) -> None:
     twin, machine = rig
     twin.set_estop(True)
-    assert "1000" in await _error(machine.cart_cmm.go_to(x=10))
+    assert "0500" in await _error(machine.cart_cmm.go_to(x=10))
     await machine.server.clear_all_errors()
     twin.set_estop(False)
     assert not await machine.dme.is_homed()  # the reference is lost
@@ -284,3 +284,53 @@ async def test_client_optical_helpers_read_the_twins_sensor(rig: Rig) -> None:
     points = data.points()
     assert len(points) > 50
     assert np.median(np.abs(points[:, 2] - top)) < 0.5  # the laser sees the block's top face
+
+
+async def test_thermal_errors_are_compensated_with_what_the_client_sets(rig: Rig) -> None:
+    from pyippdme.twin.twin import STEEL_CTE
+
+    twin, machine = rig
+    twin.noise_enabled = False
+    lo, _ = twin.objects[0].world_bounds(twin.machine.rotary_pose(0.0))
+    x, y = float(lo[0]) + 10, float(lo[1]) + 10
+    await machine.mover.enable_user()
+    await machine.cart_cmm.go_to(x=x, y=y, z=TOP + 30)
+
+    async def measure() -> float:
+        report = await machine.cart_cmm.pt_meas(x=x, y=y, z=TOP, ijk=(0, 0, 1))
+        return report.number("Z")
+
+    cold = await measure()
+    twin.temperature = 60.0
+    warm = await measure()
+    assert warm != pytest.approx(cold, abs=1e-4)  # the part grew and the server did not know
+    # Telling the server the temperature and the expansion of the part removes the error.
+    await machine.part.set_temperature(60.0)
+    await machine.part.set_xpan_coefficient(STEEL_CTE * 1e6)
+    assert await measure() == pytest.approx(cold, abs=1e-4)
+    # The sensors read what the machine really has.
+    assert await machine.cart_cmm.read_temperature_sensor("PartSensor") == pytest.approx(60.0)
+    assert await machine.cart_cmm.read_temperature_sensor("CMMSensor") == pytest.approx(20.0)
+
+
+async def test_scales_expand_with_the_room_until_the_server_updates_their_temperature(
+    rig: Rig,
+) -> None:
+    twin, machine = rig
+    twin.noise_enabled = False
+    lo, _ = twin.objects[0].world_bounds(twin.machine.rotary_pose(0.0))
+    x, y = float(lo[0]) + 10, float(lo[1]) + 10
+    await machine.mover.enable_user()
+    await machine.cart_cmm.go_to(x=x, y=y, z=TOP + 30)
+
+    async def measure() -> float:
+        report = await machine.cart_cmm.pt_meas(x=x, y=y, z=TOP, ijk=(0, 0, 1))
+        return report.number("X")
+
+    reference = await measure()
+    twin.ambient_temperature = 30.0
+    hot = await measure()
+    assert hot != pytest.approx(reference, abs=1e-5)
+    assert abs(hot - reference) < 0.2  # a few micrometres per 100 mm per kelvin, not more
+    await machine.mover.update_scale_temperatures()
+    assert await measure() == pytest.approx(reference, abs=1e-5)

@@ -137,8 +137,13 @@ _ADV_DATA_STRUCT = AdvDataStruct(
 )
 
 
-async def _adv_data_struct(_ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
+def adv_data_struct_xml() -> Xml:
+    """Return the structure of the raw data this server sends (``Tool.AdvDataStruct``)."""
     return Xml(adv_data_struct_to_xml(_ADV_DATA_STRUCT))
+
+
+async def _adv_data_struct(_ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
+    return adv_data_struct_xml()
 
 
 async def _data_acquire(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
@@ -363,6 +368,8 @@ def register(registry: CommandRegistry) -> None:
     registry.register(CommandName.DEL_RAW_DATA_FILE, _del_raw_data_file, arguments=_ACQ_NAME_PARAMS)
     registry.register(
         CommandName.DELETE_ACQUISITION, _delete_acquisition, arguments=_ACQ_NAME_PARAMS
-    )
+    )  # The standard writes this name both ways (Table 94 and the index): accept both.
+    registry.register("DeleteAcquisition", _delete_acquisition, arguments=_ACQ_NAME_PARAMS)
+
     registry.register(CommandName.DELETE_ALL_ACQUISITIONS, _delete_all_acquisitions, arguments=())
     registry.register_session_end_hook(_release_all_acquisitions_on_end_session)

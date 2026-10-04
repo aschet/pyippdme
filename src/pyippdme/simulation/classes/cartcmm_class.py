@@ -95,7 +95,7 @@ from pyippdme.server._util import (
     named_vector,
     single_basic_name,
 )
-from pyippdme.server.motion import MotionError, MotionRequest, ProbeRequest
+from pyippdme.server.motion import MotionError, MotionRequest, ProbeRequest, TemperatureProvider
 from pyippdme.server.registry import CommandRegistry, HandlerResult, PropertyKind
 from pyippdme.server.surface import SampleSurface
 from pyippdme.simulation.classes.mover_class import report_move
@@ -214,6 +214,8 @@ class _TemperatureSensor:
 
 def _axis_temperature_sensor(axis: str) -> _TemperatureSensor:
     def read(ctx: Ctx) -> float:
+        if isinstance(ctx.motion, TemperatureProvider):
+            return ctx.motion.scale_temperature(axis)
         return ctx.state.mover.scale_temperatures.get(axis, _DEFAULT_TEMPERATURE)
 
     return _TemperatureSensor(
@@ -231,8 +233,10 @@ _TEMPERATURE_SENSORS = (
         "Part",
         cmm_temp_correction=False,
         scale_axis=None,
-        read=lambda ctx: ctx.state.part.properties.get(
-            _PART_TEMPERATURE_PROPERTY, _DEFAULT_TEMPERATURE
+        read=lambda ctx: (
+            ctx.motion.part_temperature()
+            if isinstance(ctx.motion, TemperatureProvider)
+            else ctx.state.part.properties.get(_PART_TEMPERATURE_PROPERTY, _DEFAULT_TEMPERATURE)
         ),
     ),
     _TemperatureSensor(
@@ -240,7 +244,11 @@ _TEMPERATURE_SENSORS = (
         "CMM",
         cmm_temp_correction=False,
         scale_axis=None,
-        read=lambda _ctx: _DEFAULT_TEMPERATURE,
+        read=lambda ctx: (
+            ctx.motion.ambient_temperature()
+            if isinstance(ctx.motion, TemperatureProvider)
+            else _DEFAULT_TEMPERATURE
+        ),
     ),
     *(_axis_temperature_sensor(axis) for axis in _AXES),
 )
