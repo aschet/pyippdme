@@ -30,9 +30,17 @@ def test_command_names_complete_ignoring_case_and_open_the_bracket() -> None:
     assert _all(completer, "x") == []
 
 
+def test_argument_names_complete_inside_the_brackets_of_a_command() -> None:
+    names = ["GoTo", "ScanOnLine", "Get"]
+    inside = CommandCompleter(names, lambda: "GoTo(")
+    assert _all(inside, "") == ["Sync(", "X(", "Y(", "Z(", "R("]
+    assert _all(CommandCompleter(names, lambda: "GoTo(X(10),"), "Sy") == ["Sync("]
+    assert _all(CommandCompleter(names, lambda: "GoTo(X("), "") == []  # inside a value
+    assert _all(CommandCompleter(names, lambda: "ScanOnLine("), "") == []  # positional values
+    assert _all(CommandCompleter(names, lambda: "GoTo(X(10)) "), "Ge") == []  # a second word
+
+
 def test_only_the_first_word_is_completed() -> None:
-    inside = CommandCompleter(NAMES, lambda: "GoTo(")
-    assert _all(inside, "Pt") == []
     start = CommandCompleter(NAMES, lambda: "  ")
     assert _all(start, "Pt") == ["PtMeas(", "PtMeasPar("]
 

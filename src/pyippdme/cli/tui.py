@@ -95,6 +95,7 @@ from textual.widgets import (
 )
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 
+from pyippdme.cli.completion import argument_names, completion_context
 from pyippdme.cli.script import VIRTUAL_HOST, describe_address
 from pyippdme.client import IppDmeClient
 from pyippdme.client.interaction import (
@@ -109,30 +110,10 @@ from pyippdme.client.interaction import (
 )
 from pyippdme.exceptions import IppDmeConnectionError
 from pyippdme.protocol.network import TCP_NETWORK, MemoryNetwork
-from pyippdme.protocol.parameters import ParameterName
-from pyippdme.protocol.signature import DataType
 from pyippdme.protocol.transport import DEFAULT_PORT
 from pyippdme.server import IppDmeServer
 from pyippdme.simulation.catalog import BUILTIN_COMMANDS
 from pyippdme.simulation.state import SimulationState
-
-#: Fallback offered whenever the active command has at least one
-#: ``DataType.ENUM`` top-level argument (``GoTo``'s ``Positions``,
-#: ``Get``'s ``Axes``, ...). The standard's own ``GetSupportedArguments``
-#: deliberately stops at that one schema label - "what belongs inside an
-#: enum" isn't described anywhere machine-readable (see
-#: :mod:`pyippdme.protocol.signature`'s module docstring) - so suggesting
-#: the label itself (e.g. literally ``Positions(``) would be actively
-#: wrong, nobody types that. In practice, across every built-in command,
-#: what actually gets typed inside one of these is always drawn from this
-#: same small set of axis-style names, so offering them is a pragmatic,
-#: deliberately-scoped stand-in rather than a generic solution.
-_ENUM_ARGUMENT_FALLBACK = (
-    ParameterName.X,
-    ParameterName.Y,
-    ParameterName.Z,
-    ParameterName.R,
-)
 
 _IDENTIFIER_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*$")
 
@@ -146,34 +127,6 @@ def _known_command_names() -> list[str]:
     return list(BUILTIN_COMMANDS)
 
 
-def _completion_context(text_before_cursor: str) -> tuple[str | None, str]:
-    """Parse text up to the cursor into ``(command whose args we're inside, partial word)``.
-
-    ``command`` is ``None`` when the cursor isn't inside any command's
-    parentheses at all (suggest command names); otherwise it's the name
-    of the *outermost* open command, even if the cursor is actually
-    nested deeper still (e.g. inside ``ScanOnCurve(Format(``) - nested
-    groups are rare enough in this protocol (only ``ScanOnCurve`` has
-    one) that reusing the outer command's argument names there, rather
-    than tracking nesting precisely, is an acceptable simplification.
-    """
-    depth = 0
-    command_name: str | None = None
-    for index, char in enumerate(text_before_cursor):
-        if char == "(":
-            if depth == 0:
-                match = _IDENTIFIER_RE.search(text_before_cursor[:index])
-                command_name = match.group(0) if match else None
-            depth += 1
-        elif char == ")" and depth > 0:
-            depth -= 1
-            if depth == 0:
-                command_name = None
-    partial_match = _IDENTIFIER_RE.search(text_before_cursor)
-    partial = partial_match.group(0) if partial_match else ""
-    return (command_name if depth >= 1 else None), partial
-
-
 def _completion_candidates(state: TargetState) -> list[DropdownItem]:
     prefix = state.text[: state.cursor_position]
     meta_prefix = _META_COMMAND_PREFIX_RE.match(prefix)
@@ -185,7 +138,7 @@ def _completion_candidates(state: TargetState) -> list[DropdownItem]:
         # below exactly like a bare command name would).
         needle = meta_prefix.group(1).casefold()
         return [DropdownItem(name) for name in _META_COMMANDS if name.casefold().startswith(needle)]
-    command_name, partial = _completion_context(prefix)
+    command_name, partial = completion_context(prefix)
     if command_name is None and not partial:
         # Nothing typed and not inside any command's parens: offering all
         # ~90 built-in commands here wouldn't be a useful suggestion, and
@@ -197,18 +150,7 @@ def _completion_candidates(state: TargetState) -> list[DropdownItem]:
     if command_name is None:
         names: tuple[str, ...] = tuple(BUILTIN_COMMANDS)
     else:
-        info = BUILTIN_COMMANDS.get(command_name)
-        arguments = info.arguments if info is not None else None
-        if not arguments or all(p.positional for p in arguments):
-            # Either nothing on record, or a "Kind U" positional-style command
-            # (e.g. ScanOnLine(1, 2, 3, ...)) - its parameter *names* aren't
-            # something you ever type, only their values, in order, so there's
-            # nothing to suggest here (see Parameter.positional's docstring).
-            names = ()
-        else:
-            named = tuple(p.name for p in arguments if p.datatype != DataType.ENUM)
-            has_enum_argument = any(p.datatype == DataType.ENUM for p in arguments)
-            names = (*named, *_ENUM_ARGUMENT_FALLBACK) if has_enum_argument else named
+        names = argument_names(command_name)
     needle = partial.casefold()
     return [DropdownItem(name) for name in names if name.casefold().startswith(needle)]
 
@@ -348,7 +290,7 @@ class _CommandAutoComplete(AutoComplete):
             return False
         if self.target.value.startswith("."):
             return False  # a meta-command's own argument - see apply_completion
-        command_name, _partial = _completion_context(
+        command_name, _partial = completion_context(
             self.target.value[: self.target.cursor_position]
         )
         if command_name is not None:
@@ -363,7 +305,7 @@ class _CommandAutoComplete(AutoComplete):
         del value  # AutoComplete.__init__ assigns a starting value; always computed live instead
 
     def get_search_string(self, state: TargetState) -> str:
-        return _completion_context(state.text[: state.cursor_position])[1]
+        return completion_context(state.text[: state.cursor_position])[1]
 
     def should_show_dropdown(self, search_string: str) -> bool:
         del search_string  # required by the overridden signature; see below
@@ -395,7 +337,7 @@ class _CommandAutoComplete(AutoComplete):
         # with the chosen value, leaving the rest of the text untouched.
         text = state.text
         cursor = state.cursor_position
-        command_name, partial = _completion_context(text[:cursor])
+        command_name, partial = completion_context(text[:cursor])
         start = cursor - len(partial)
         target = self.target
         suffix = ""

@@ -9,11 +9,11 @@ from __future__ import annotations
 from textual.widgets import Button, Input, ListView, RichLog, Static
 from textual_autocomplete import AutoComplete, DropdownItem
 
+from pyippdme.cli.completion import completion_context
 from pyippdme.cli.tui import (
     _HELP_PLACEHOLDER,
     _HELP_USAGE,
     IppDmeTui,
-    _completion_context,
     _format_signature,
 )
 
@@ -518,19 +518,19 @@ async def test_tui_help_for_a_positional_command_lists_its_parameters(
 
 
 def test_completion_context_parses_bare_command_name() -> None:
-    assert _completion_context("GoT") == (None, "GoT")
+    assert completion_context("GoT") == (None, "GoT")
 
 
 def test_completion_context_parses_inside_a_commands_arguments() -> None:
-    assert _completion_context("GoTo(Sy") == ("GoTo", "Sy")
+    assert completion_context("GoTo(Sy") == ("GoTo", "Sy")
 
 
 def test_completion_context_after_closing_the_command_reverts_to_bare() -> None:
-    assert _completion_context("GoTo(X(10)) ") == (None, "")
+    assert completion_context("GoTo(X(10)) ") == (None, "")
 
 
 def test_completion_context_nested_groups_reuse_the_outer_command() -> None:
-    assert _completion_context("ScanOnCurve(Format(") == ("ScanOnCurve", "")
+    assert completion_context("ScanOnCurve(Format(") == ("ScanOnCurve", "")
 
 
 def test_format_signature_renders_a_dash_bullet_list_without_indentation() -> None:

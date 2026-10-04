@@ -563,8 +563,9 @@ What to use for what, without reading the simulation code:
 
 ## Interactive shell
 
-In the simple shell (`ippdme client`), Tab completes the command name at the start of the line and
-further Tabs cycle through the matches in place (Shift+Tab goes back), with no list or popup. It
+In the simple shell (`ippdme client`), Tab completes the command name at the start of the line, and
+directly inside a command's brackets its argument names (`GoTo(` then `R`, `Sync`, `X`, ...). Further
+Tabs cycle through the matches in place (Shift+Tab goes back), with no list or popup. It
 uses the standard library's `readline`, so it is on where that exists (Linux; macOS lists the
 matches instead). Ctrl+D quits, and the shell says so when it starts.
 

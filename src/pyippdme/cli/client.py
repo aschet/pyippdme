@@ -51,6 +51,7 @@ try:
 except ImportError:  # pragma: no cover - platforms without readline (e.g. Windows)
     readline = None  # type: ignore[assignment]
 
+from pyippdme.cli import completion
 from pyippdme.cli.script import describe_address, run_line, run_script_lines, start_embedded_server
 from pyippdme.cli.session_log import SessionLog
 from pyippdme.client import IppDmeClient, commandform
@@ -136,11 +137,14 @@ async def _print_events(client: IppDmeClient) -> None:
 
 
 class CommandCompleter:
-    """Tab completion of the command name at the start of the line (a ``readline`` completer).
+    """Tab completion of command and argument names (a ``readline`` completer).
 
-    ``line_before`` gives the text before the word being completed.
-    Matches ignore case and are sorted. With GNU readline the first :kbd:`Tab` completes and the
-    next ones cycle through the matches in place (:kbd:`Shift-Tab` goes back); see
+    At the start of the line it completes the command name; directly inside a command's brackets
+    it completes that command's argument names (``GoTo(`` then ``X``, ``Y``, ...), as the full
+    screen shell does (:mod:`pyippdme.cli.completion`). Every match gets an opening bracket.
+    ``line_before`` gives the text before the word being completed. Matches ignore case and keep
+    the order of the catalog. With GNU readline the first :kbd:`Tab` completes and the next ones
+    cycle through the matches in place (:kbd:`Shift-Tab` goes back); see
     :func:`install_completion`.
     """
 
@@ -152,13 +156,16 @@ class CommandCompleter:
     def __call__(self, text: str, state: int) -> str | None:
         if state == 0:
             before = self._line() if self._line is not None else ""
-            # Only the command name is completed: nothing but blanks may stand before it.
-            if before.strip():
-                self._matches = []
-            else:
-                lowered = text.lower()
-                self._matches = [f"{n}(" for n in self.names if n.lower().startswith(lowered)]
+            self._matches = [f"{name}(" for name in self._candidates(before, text)]
         return self._matches[state] if state < len(self._matches) else None
+
+    def _candidates(self, before: str, text: str) -> list[str]:
+        if not before.strip():
+            lowered = text.lower()
+            return [n for n in self.names if n.lower().startswith(lowered)]
+        if completion.paren_depth(before) == 0:
+            return []  # one command per line: nothing follows a finished command
+        return completion.candidate_names(before + text, top_level_only=True)
 
 
 def install_completion(names: list[str] | None = None) -> bool:
