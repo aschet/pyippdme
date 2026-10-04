@@ -396,10 +396,13 @@ class DigitalTwin:
         on_line_sent: Callable[[str], None] | None = None,
         on_connect: Callable[[str], None] | None = None,
         on_disconnect: Callable[[str], None] | None = None,
+        max_pending: int | None = None,
     ) -> VirtualCMM:
         """Build the protocol server of this twin (use ``await server.start(host, port)``).
 
         The hooks are called after the twin has seen the line or the connection itself.
+        ``max_pending`` makes the server delay the acknowledgement of a command while that many
+        commands wait (5.4.3); by default it acknowledges at once.
         """
 
         def received(line: str) -> None:
@@ -436,6 +439,7 @@ class DigitalTwin:
             on_line_sent=sent,
             on_connect=connected,
             on_disconnect=disconnected,
+            max_pending=max_pending,
         )
         self.server = server
         return server

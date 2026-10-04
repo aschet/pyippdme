@@ -134,6 +134,7 @@ class VirtualCMM(IppDmeServer[SimulationState]):
         on_line_sent: LineHook | None = None,
         on_connect: Callable[[str], None] | None = None,
         on_disconnect: Callable[[str], None] | None = None,
+        max_pending: int | None = None,
     ) -> None:
         super().__init__(
             backend=backend if backend is not None else SimulatedBackend(),
@@ -154,6 +155,7 @@ class VirtualCMM(IppDmeServer[SimulationState]):
             on_line_sent=on_line_sent,
             on_connect=on_connect,
             on_disconnect=on_disconnect,
+            max_pending=max_pending,
         )
 
     # -- events the server sends on its own (5.5.3) ----------------------------------

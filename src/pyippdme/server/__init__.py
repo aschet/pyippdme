@@ -38,6 +38,7 @@ import asyncio
 import contextlib
 import logging
 import re
+from collections import deque
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from typing import Generic
@@ -150,7 +151,10 @@ class _ServerConnection(Generic[StateT]):
         on_line_received: LineHook | None = None,
         on_line_sent: LineHook | None = None,
         previous_state: StateT | None = None,
+        max_pending: int | None = None,
     ) -> None:
+        self._max_pending = max_pending
+        self._unacked: deque[tuple[TagLike, str, tuple[Argument, ...]]] = deque()
         self._transport = transport
         self._network = network
         self._registry = registry
@@ -202,6 +206,17 @@ class _ServerConnection(Generic[StateT]):
             return
         tag, name, args = command.tag, command.method.name, command.method.args
 
+        prioritized = name == CommandName.ABORT_E or name.endswith("E")
+        if (
+            not prioritized
+            and self._max_pending is not None
+            and (self._unacked or self._queue.qsize() >= self._max_pending)
+        ):
+            # 5.4.3: the server delays the acknowledgement until it can take more commands. The
+            # line is kept; the client, which may not send before the Ack, simply has to wait.
+            self._unacked.append((tag, name, args))
+            return
+
         # Ack is sent immediately and in receipt order regardless of queueing:
         # this is a single ordered TCP stream, so that ordering is free.
         self._write(AckResponse(tag))
@@ -218,9 +233,20 @@ class _ServerConnection(Generic[StateT]):
         """Run the standard command queue: exactly one non-prioritized command at a time."""
         while True:
             tag, name, args = await self._queue.get()
+            await self._promote()
             task = self._start(tag, name, args)
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+    async def _promote(self) -> None:
+        """Acknowledge and queue the commands that were held back, as far as there is room."""
+        while self._unacked and (
+            self._max_pending is None or self._queue.qsize() < self._max_pending
+        ):
+            tag, name, args = self._unacked.popleft()
+            self._write(AckResponse(tag))
+            await self._transport.drain()
+            await self._queue.put((tag, name, args))
 
     def _start(self, tag: TagLike, name: str, args: tuple[Argument, ...]) -> asyncio.Task[None]:
         cancel = asyncio.Event()
@@ -255,6 +281,10 @@ class _ServerConnection(Generic[StateT]):
         pending: list[tuple[TagLike, str, tuple[Argument, ...]]] = []
         while not self._queue.empty():
             pending.append(self._queue.get_nowait())
+        while self._unacked:  # not yet acknowledged: the Ack still has to come first
+            held = self._unacked.popleft()
+            self._write(AckResponse(held[0]))
+            pending.append(held)
         for pending_tag, pending_name, _args in pending:
             await self._send_error(
                 pending_tag,
@@ -557,7 +587,11 @@ class IppDmeServer(Generic[StateT]):
         on_line_sent: LineHook | None = None,
         on_connect: Callable[[str], None] | None = None,
         on_disconnect: Callable[[str], None] | None = None,
+        max_pending: int | None = None,
     ) -> None:
+        #: How many acknowledged commands may wait for the one that runs; a further command is
+        #: acknowledged only when there is room (5.4.3). ``None`` acknowledges at once.
+        self.max_pending = max_pending
         self.registry = CommandRegistry()
         for register_class in command_classes:
             register_class(self.registry)
@@ -671,6 +705,7 @@ class IppDmeServer(Generic[StateT]):
             self.on_line_received,
             self.on_line_sent,
             self._last_state,
+            self.max_pending,
         )
         self._connections.append(connection)
         try:
