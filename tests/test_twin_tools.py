@@ -382,3 +382,19 @@ async def test_faults_stop_the_machine_with_their_errors(rig: Rig) -> None:
     await machine.cart_cmm.go_to(x=10)
     with pytest.raises(ValueError, match="unknown fault"):
         twin.set_fault("gremlins")
+
+
+async def test_a_module_that_broke_away_cannot_be_reseated_while_the_head_is_faulty(
+    rig: Rig,
+) -> None:
+    twin, machine = rig
+    rx, ry, _ = twin.machine.rack_slots()["RefTool"]
+    await machine.cart_cmm.go_to(x=rx, y=ry - 60, z=40.0)
+    assert "2504" in await _error(machine.cart_cmm.go_to(x=rx, y=ry, z=8.0))
+    await machine.server.clear_all_errors()
+    twin.set_fault("reseat_failure")
+    assert "1500" in await _error(machine.tool_changer.change_tool("RefTool2"))
+    await machine.server.clear_all_errors()
+    twin.set_fault("reseat_failure", False)
+    await machine.tool_changer.change_tool("RefTool2")
+    assert not twin.snapshot().detached

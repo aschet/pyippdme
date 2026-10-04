@@ -308,7 +308,15 @@ async def _release_sha_mem(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResul
 async def _get_raw_data_file(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
     acq_name, data = _require_acquisition(ctx, args, CommandName.GET_RAW_DATA_FILE)
     directory = default_raw_data_directory()
-    path = write_raw_data_file(directory, acq_name, esbf_payload(data, "double"), ".esbf")
+    try:
+        path = write_raw_data_file(directory, acq_name, esbf_payload(data, "double"), ".esbf")
+    except OSError as error:
+        raise ServerError(
+            ErrorSeverity.CRITICAL,
+            ErrorCode.FILE_NOT_FOUND,
+            CommandName.GET_RAW_DATA_FILE,
+            f"The raw data file cannot be written: {error.strerror or error}",
+        ) from None
     ctx.state.raw_data.files[acq_name] = path
     # FileURL is documented as kind [name] (Table 103), but a file:// URL
     # contains characters (':', '/') the [name] grammar (a bare identifier)

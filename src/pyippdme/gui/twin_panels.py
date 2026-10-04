@@ -40,7 +40,7 @@ from pyippdme.twin import DigitalTwin
 from pyippdme.twin.artifact import build_check_artifact, build_reference_sphere
 from pyippdme.twin.check import MODES, CheckOptions, run_check_against_server
 from pyippdme.twin.spec import ToolSpec
-from pyippdme.twin.twin import FAULTS
+from pyippdme.twin.twin import FAULTS, TOOL_FAULTS
 
 
 class ToolPanel(QWidget):
@@ -278,7 +278,7 @@ class SafetyPanel(QWidget):
         layout.addWidget(self.air)
         fault_row = QHBoxLayout()
         self.fault_combo = QComboBox()
-        for name in FAULTS:
+        for name in (*FAULTS, *TOOL_FAULTS):
             self.fault_combo.addItem(name.replace("_", " "), name)
         self.fault_combo.setToolTip(
             "A fault the machine can have; moving then fails with its error"

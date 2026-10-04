@@ -110,6 +110,14 @@ FAULTS: dict[str, tuple[ErrorSeverity, str, str]] = {
         "No communication with the controller",
     ),
 }
+#: Faults that only the tool changer notices: a module that broke away cannot be seated again.
+TOOL_FAULTS: dict[str, tuple[ErrorSeverity, str, str]] = {
+    "reseat_failure": (
+        ErrorSeverity.CRITICAL,
+        ErrorCode.FAILED_TO_RESEAT_HEAD,
+        "The module cannot be seated again; the head needs service",
+    ),
+}
 #: Expansion of the glass-ceramic scales of the machine, per kelvin.
 SCALE_CTE = 8.0e-6
 _FRAME = 1.0 / 60.0
@@ -724,13 +732,14 @@ class DigitalTwin:
         A fault stays until it is cleared. A fatal one (a failing scale, no link to the
         controller) also loses the reference, so the machine has to be homed again.
         """
-        if kind not in FAULTS:
-            raise ValueError(f"unknown fault {kind!r}; choose from {', '.join(FAULTS)}")
+        known = {**FAULTS, **TOOL_FAULTS}
+        if kind not in known:
+            raise ValueError(f"unknown fault {kind!r}; choose from {', '.join(known)}")
         if on:
             self.faults.add(kind)
-            if FAULTS[kind][0] >= ErrorSeverity.FATAL:
+            if known[kind][0] >= ErrorSeverity.FATAL:
                 self._lose_reference()
-            self.last_error = FAULTS[kind][2]
+            self.last_error = known[kind][2]
         else:
             self.faults.discard(kind)
             self.last_error = ""
@@ -1358,6 +1367,9 @@ class DigitalTwin:
     ) -> None:
         """Drive to the rack, put the old module back, take the new one, return."""
         self.check_ready("ChangeTool")
+        if "reseat_failure" in self.faults and self.detached:
+            severity, code, text = TOOL_FAULTS["reseat_failure"]
+            raise ServerError(severity, code, "ChangeTool", text)
         self.detached.discard(target)  # a module that broke away is seated again by the change
         if current == target:
             return
