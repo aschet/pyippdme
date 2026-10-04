@@ -53,7 +53,7 @@ except ImportError:  # pragma: no cover - platforms without readline (e.g. Windo
 
 from pyippdme.cli.script import describe_address, run_line, run_script_lines, start_embedded_server
 from pyippdme.cli.session_log import SessionLog
-from pyippdme.client import IppDmeClient
+from pyippdme.client import IppDmeClient, commandform
 from pyippdme.protocol.network import TCP_NETWORK
 from pyippdme.server import IppDmeServer
 from pyippdme.simulation.state import SimulationState
@@ -135,16 +135,69 @@ async def _print_events(client: IppDmeClient) -> None:
         print(f"[event] {event.tag.to_wire()} # {event.data.to_wire()}")
 
 
+class CommandCompleter:
+    """Tab completion of the command name at the start of the line (a ``readline`` completer).
+
+    ``line_before`` gives the text before the word being completed.
+    Matches ignore case and are sorted. With GNU readline the first :kbd:`Tab` completes and the
+    next ones cycle through the matches in place (:kbd:`Shift-Tab` goes back); see
+    :func:`install_completion`.
+    """
+
+    def __init__(self, names: list[str], line_before: Callable[[], str] | None = None) -> None:
+        self.names = sorted(names)
+        self._line = line_before
+        self._matches: list[str] = []
+
+    def __call__(self, text: str, state: int) -> str | None:
+        if state == 0:
+            before = self._line() if self._line is not None else ""
+            # Only the command name is completed: nothing but blanks may stand before it.
+            if before.strip():
+                self._matches = []
+            else:
+                lowered = text.lower()
+                self._matches = [f"{n}(" for n in self.names if n.lower().startswith(lowered)]
+        return self._matches[state] if state < len(self._matches) else None
+
+
+def install_completion(names: list[str] | None = None) -> bool:
+    """Complete command names with :kbd:`Tab`, cycling in place; return whether it is on.
+
+    Needs the standard library's ``readline``. GNU readline binds Tab to ``menu-complete`` (each
+    press shows the next match on the line, no list); macOS' libedit has no such mode and lists
+    the matches instead.
+    """
+    if readline is None:
+        return False
+    completer = CommandCompleter(
+        names if names is not None else commandform.command_names(),
+        lambda: readline.get_line_buffer()[: readline.get_begidx()],
+    )
+    readline.set_completer(completer)
+    readline.set_completer_delims(" \t\n(),")
+    if "libedit" in (readline.__doc__ or ""):  # pragma: no cover - macOS
+        readline.parse_and_bind("bind ^I rl_complete")
+    else:
+        readline.parse_and_bind("tab: menu-complete")
+        readline.parse_and_bind('"\\e[Z": menu-complete-backward')
+    return True
+
+
 async def _interactive_loop(
     client: IppDmeClient,
     prompt: str,
     output: TextIO,
     on_command: Callable[[str], None] | None,
 ) -> None:
+    hint = "Type a command and press Enter; Ctrl+D quits."
     if readline is not None:
+        if install_completion():
+            hint = "Type a command and press Enter (Tab completes its name); Ctrl+D quits."
         readline.set_history_length(_HISTORY_LENGTH)
         with contextlib.suppress(OSError):
             readline.read_history_file(_HISTORY_FILE)
+    print(hint)
     try:
         while True:
             try:
