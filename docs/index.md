@@ -569,6 +569,21 @@ Tabs cycle through the matches in place (Shift+Tab goes back), with no list or p
 uses the standard library's `readline`, so it is on where that exists (Linux; macOS lists the
 matches instead). Ctrl+D quits, and the shell says so when it starts.
 
+The shell also has meta commands, which start with a dot and are not sent to the server:
+`.help` lists them, `.cmds [group]` lists the commands by task, `.man <command>` prints what a
+command does, its arguments with their types (`*` marks an optional one, bare values are written
+in order without their names), what it returns and an example, and `.quit` leaves (Ctrl+D does
+too). Tab completes the meta command names and the command after `.man`. The descriptions are
+written for this package and are not the text of the standard; read the standard for exact
+definitions.
+
+`pyippdme.client.reference.CommandReference` holds the same information for other front ends:
+`find(name)` returns a `CommandDoc` (summary, signature, arguments with type, optional and
+description, return value, notes, example, group), `groups()`, `search()` and `manual()` give the
+rest, and `describe()` adds a command of your own. `MetaCommands` is the dot commands as a class
+(`run(line)` returns the text and whether to quit). The command client window shows the same
+page in its Help tab (F1).
+
 ```bash
 ippdme client 127.0.0.1 1294
 ```

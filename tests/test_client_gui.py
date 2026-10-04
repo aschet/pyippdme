@@ -107,7 +107,7 @@ def test_dialogs_measure_and_the_status_bar_follows(window: ClientWindow) -> Non
 
 def test_errors_show_in_the_status_bar(window: ClientWindow) -> None:
     window.connect_virtual()
-    _wait(lambda: window.host.connected and window.homed_label.text != "")  # session started
+    _wait(lambda: window.host.connected and window.session_led.state == "on")  # session started
     window.send("NoSuchCommand()")
     _wait(lambda: window.error_label.text().startswith("Error"))
     assert "NoSuchCommand" in window.log.toPlainText()
@@ -117,7 +117,7 @@ def test_errors_show_in_the_status_bar(window: ClientWindow) -> None:
 
 def test_optical_dialog_acquires_points_into_the_cloud_view(window: ClientWindow) -> None:
     window.connect_virtual()
-    _wait(lambda: window.host.connected and window.homed_label.text != "")
+    _wait(lambda: window.host.connected and window.session_led.state == "on")
     dialog = window.open_dialog("optical")
     dialog.info_requested.emit()  # type: ignore[attr-defined]
     _wait(lambda: "raw data" in dialog.info.text())  # type: ignore[attr-defined]
@@ -203,3 +203,22 @@ def test_the_log_shows_quotes_as_they_are(window: ClientWindow) -> None:
     text = window.log.toPlainText()
     assert '"quoted"' in text
     assert "&quot;" not in text
+
+
+def test_the_help_tab_shows_the_manual_of_the_selected_command(window: ClientWindow) -> None:
+    tree = window.command_list
+    for g in range(tree.topLevelItemCount()):
+        group = tree.topLevelItem(g)
+        assert group is not None
+        for c in range(group.childCount()):
+            child = group.child(c)
+            if child is not None and child.text(0) == "GoTo":
+                tree.setCurrentItem(child)
+    page = window.reference_view.toPlainText()
+    assert "GoTo" in page
+    assert "Sync" in page
+    assert "Returns" in page
+    window.command_line.setText("PtMeas(X(1))")
+    window.show_help()
+    assert window.tabs.currentWidget() is window.reference_view
+    assert "OnPtMeasReport" in window.reference_view.toPlainText()

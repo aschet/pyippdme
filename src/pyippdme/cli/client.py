@@ -55,6 +55,7 @@ from pyippdme.cli import completion
 from pyippdme.cli.script import describe_address, run_line, run_script_lines, start_embedded_server
 from pyippdme.cli.session_log import SessionLog
 from pyippdme.client import IppDmeClient, commandform
+from pyippdme.client.reference import CommandReference, MetaCommands
 from pyippdme.protocol.network import TCP_NETWORK
 from pyippdme.server import IppDmeServer
 from pyippdme.simulation.state import SimulationState
@@ -156,8 +157,18 @@ class CommandCompleter:
     def __call__(self, text: str, state: int) -> str | None:
         if state == 0:
             before = self._line() if self._line is not None else ""
-            self._matches = [f"{name}(" for name in self._candidates(before, text)]
+            self._matches = self._complete(before, text)
         return self._matches[state] if state < len(self._matches) else None
+
+    def _complete(self, before: str, text: str) -> list[str]:
+        """Return the completions of ``text``: meta commands, command names, argument names."""
+        lowered = text.lower()
+        words = before.split()
+        if text.startswith(MetaCommands.PREFIX) and not words:
+            return [n for n in MetaCommands.names() if n.startswith(lowered)]
+        if words and words[0].lower() == ".man" and len(words) == 1:
+            return [n for n in self.names if n.lower().startswith(lowered)]  # a name, no bracket
+        return [f"{name}(" for name in self._candidates(before, text)]
 
     def _candidates(self, before: str, text: str) -> list[str]:
         if not before.strip():
@@ -197,14 +208,18 @@ async def _interactive_loop(
     output: TextIO,
     on_command: Callable[[str], None] | None,
 ) -> None:
-    hint = "Type a command and press Enter; Ctrl+D quits."
+    hint = "Type a command and press Enter; .help lists the meta commands; Ctrl+D quits."
     if readline is not None:
         if install_completion():
-            hint = "Type a command and press Enter (Tab completes its name); Ctrl+D quits."
+            hint = (
+                "Type a command and press Enter (Tab completes its name); "
+                ".help lists the meta commands; Ctrl+D quits."
+            )
         readline.set_history_length(_HISTORY_LENGTH)
         with contextlib.suppress(OSError):
             readline.read_history_file(_HISTORY_FILE)
     print(hint)
+    meta = MetaCommands(CommandReference())
     try:
         while True:
             try:
@@ -214,6 +229,12 @@ async def _interactive_loop(
                 return
             line = line.strip()
             if not line:
+                continue
+            if meta.is_meta(line):
+                result = meta.run(line)
+                if result.quit:
+                    return
+                print(result.text)
                 continue
             if on_command is not None:
                 on_command(line)

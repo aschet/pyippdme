@@ -131,6 +131,7 @@ COMMAND_GROUPS: dict[str, tuple[str, ...]] = {
         "CalcToolAlignment",
         "CalcToolAngles",
         "UseSmallestAngletoAlignTool",
+        "UseSmallestAngleToAlignTool",
         "ReQualify",
         "EnableOptimize",
         "DisableOptimize",
