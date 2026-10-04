@@ -75,7 +75,12 @@ from pyippdme.protocol.errors import ErrorCode, ErrorSeverity, ServerError
 from pyippdme.protocol.signature import DataType, Parameter
 from pyippdme.server import builders
 from pyippdme.server._util import bad_argument
-from pyippdme.server.motion import CalibrationAware, OffsetProvider, RadiusProvider
+from pyippdme.server.motion import (
+    AlignmentSolver,
+    CalibrationAware,
+    OffsetProvider,
+    RadiusProvider,
+)
 from pyippdme.server.registry import CommandHandler, CommandRegistry, HandlerResult, PropertyKind
 from pyippdme.server.tool import PARAMETER_FIELDS, ParameterField, ToolParameter, ToolParameters
 from pyippdme.simulation.context import Ctx, csy_context
@@ -394,6 +399,21 @@ def tool_alignment_numbers(ctx: Ctx, namespace: str, cause: str) -> tuple[float,
     return (*primary, *(secondary or ()))
 
 
+def _reach(
+    ctx: Ctx, tool_name: str, primary: Vec3, secondary: Vec3 | None
+) -> tuple[Vec3, Vec3 | None]:
+    """Return the orientation the head really reaches for the requested one."""
+    handler = ctx.tool_handler
+    if isinstance(handler, AlignmentSolver):
+        return handler.reach(tool_name, primary, secondary)
+    return primary, secondary
+
+
+def _angle_between(a: Vec3, b: Vec3) -> float:
+    """Return the angle between two directions in degrees."""
+    return math.degrees(math.acos(max(-1.0, min(1.0, dot(normalize(a), normalize(b))))))
+
+
 def _check_smallest_angle(
     ctx: Ctx, cause: str, old: tuple[Vec3, Vec3 | None], new: tuple[Vec3, Vec3 | None]
 ) -> None:
@@ -457,6 +477,7 @@ def apply_tool_orientation(
         new_b = current_b if b is None else (current_b + b if relative else b)
         new_primary = alignment_from_angles(new_a, new_b)
         new_secondary = None
+    new_primary, new_secondary = _reach(ctx, tool_name, new_primary, new_secondary)
     _check_smallest_angle(ctx, cause, (primary, secondary), (new_primary, new_secondary))
     ctx.state.tool.alignment[tool_name] = (new_primary, new_secondary)
 
@@ -737,13 +758,24 @@ async def _align_tool(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
         secondary = normalize(secondary_raw) if secondary_raw is not None else None
     except ValueError as exc:
         raise bad_argument(CommandName.ALIGN_TOOL, "i1,j1,k1/i2,j2,k2 must be non-zero") from exc
+    tool_name = ctx.state.tool.active_name
+    reached, reached_secondary = _reach(ctx, tool_name, primary, secondary)
+    if alpha > 0 and _angle_between(reached, primary) > alpha:
+        raise ServerError(
+            ErrorSeverity.CRITICAL,
+            ErrorCode.TOOL_NOT_ALIGNABLE_TO_ORIENTATION,
+            CommandName.ALIGN_TOOL,
+            "The tool reaches the direction only to within "
+            f"{_angle_between(reached, primary):.2f} degrees, more than alpha",
+        )
     _check_smallest_angle(
         ctx,
         CommandName.ALIGN_TOOL,
-        tool_alignment(ctx, ctx.state.tool.active_name),
-        (primary, secondary),
+        tool_alignment(ctx, tool_name),
+        (reached, reached_secondary),
     )
-    ctx.state.tool.alignment[ctx.state.tool.active_name] = (primary, secondary)
+    primary, secondary = reached, reached_secondary
+    ctx.state.tool.alignment[tool_name] = (primary, secondary)
     # AlignTool() moves the machine, so (6.7.1) it implicitly executes DisableUser().
     ctx.state.mover.user_enabled = False
     # Table 105: the reached vectors are returned unnamed ("Kind U").

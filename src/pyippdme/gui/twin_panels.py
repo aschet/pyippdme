@@ -18,6 +18,7 @@ from typing import Any
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -39,6 +40,7 @@ from pyippdme.twin import DigitalTwin
 from pyippdme.twin.artifact import build_check_artifact, build_reference_sphere
 from pyippdme.twin.check import MODES, CheckOptions, run_check_against_server
 from pyippdme.twin.spec import ToolSpec
+from pyippdme.twin.twin import FAULTS
 
 
 class ToolPanel(QWidget):
@@ -274,11 +276,37 @@ class SafetyPanel(QWidget):
         self.require.toggled.connect(lambda on: setattr(twin, "require_qualification", on))
         layout.addWidget(self.estop)
         layout.addWidget(self.air)
+        fault_row = QHBoxLayout()
+        self.fault_combo = QComboBox()
+        for name in FAULTS:
+            self.fault_combo.addItem(name.replace("_", " "), name)
+        self.fault_combo.setToolTip(
+            "A fault the machine can have; moving then fails with its error"
+        )
+        self.fault_button = QPushButton(load_icon("warning"), "Inject")
+        self.fault_button.setCheckable(True)
+        self.fault_button.setToolTip("Switch the chosen fault on or off")
+        self.fault_button.toggled.connect(self._fault)
+        self.fault_combo.currentIndexChanged.connect(self._fault_chosen)
+        fault_row.addWidget(self.fault_combo, 1)
+        fault_row.addWidget(self.fault_button)
+        layout.addLayout(fault_row)
         layout.addWidget(self.require)
         layout.addWidget(QLabel("Qualified (tool, head position):"))
         self.qualified = QListWidget()
         layout.addWidget(self.qualified, 1)
         self.refresh()
+
+    def _fault(self, on: bool) -> None:
+        self.twin.set_fault(self.fault_combo.currentData(), on)
+        self.fault_button.setText("Clear" if on else "Inject")
+
+    def _fault_chosen(self) -> None:
+        on = self.fault_combo.currentData() in self.twin.faults
+        self.fault_button.blockSignals(True)
+        self.fault_button.setChecked(on)
+        self.fault_button.setText("Clear" if on else "Inject")
+        self.fault_button.blockSignals(False)
 
     def _estop(self, pressed: bool) -> None:
         self.twin.set_estop(pressed)
@@ -286,6 +314,7 @@ class SafetyPanel(QWidget):
 
     def sync(self) -> None:
         """Show the state the twin has (it can change by other means, e.g. a script)."""
+        self._fault_chosen()
         for box, value in ((self.estop, self.twin.estop), (self.air, self.twin.air_ok)):
             if box.isChecked() != value:
                 box.blockSignals(True)

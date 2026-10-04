@@ -127,6 +127,9 @@ class TwinMotion:
         if request.cancel.is_set():
             return position
         if hit is not None:
+            if twin.last_hit_was_touch:
+                code, text = twin.report_touch(hit, end)
+                raise MotionError(ErrorSeverity.ERROR, ErrorCode(code), cause, text, end)
             twin.report_collision(hit, end)
             raise MotionError(
                 ErrorSeverity.CRITICAL, ErrorCode.COLLISION, cause, f"Collision with {hit}", end

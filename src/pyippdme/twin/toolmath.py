@@ -150,6 +150,27 @@ def head_rotation(spec: ToolSpec, axis: Vec3) -> tuple[Matrix, Vec3, tuple[float
     return r, (float(r[0, 2]), float(r[1, 2]), float(r[2, 2])), position
 
 
+#: How far the A axis of a head turns, in degrees from straight down.
+HEAD_A_MAX = {"indexed": 105.0, "continuous": 120.0}
+
+
+def reach_orientation(spec: ToolSpec, axis: Vec3) -> Vec3:
+    """Return the axis a head really gets for the requested ``axis``.
+
+    Raises ``ValueError`` with the reason when the head cannot reach it: it is a fixed mount, or A
+    is beyond the range of the head. An indexing head snaps to its step; a continuous head follows
+    the axis exactly.
+    """
+    if spec.head == "fixed":
+        raise ValueError("the tool is on a fixed mount")
+    d = normalize(axis)
+    a = math.degrees(math.acos(max(-1.0, min(1.0, d[2]))))
+    if a > HEAD_A_MAX[spec.head] + 1e-9:
+        raise ValueError(f"A = {a:.1f} degrees is beyond the {HEAD_A_MAX[spec.head]:g} of the head")
+    _, reached, _ = head_rotation(spec, axis)
+    return reached
+
+
 def pivot_for(spec: ToolSpec, tcp: Vec3, axis: Vec3) -> Vec3:
     """Where the head pivot is when the tool centre point is at ``tcp`` and points ``axis``."""
     rotation, _, _ = head_rotation(spec, axis)
