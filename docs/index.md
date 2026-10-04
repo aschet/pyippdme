@@ -447,10 +447,11 @@ own temperature is not modelled.
 
 Where this package departs from VDMA 8722:2024-04, or has to guess:
 
-- The server acknowledges every command at once. The standard (5.4.3) lets a server
-  delay the Ack until it can accept more commands.
+- Without `max_pending` the server acknowledges every command at once. With it (5.4.3), the
+  Ack of a command is delayed until fewer than that many commands are unfinished; `AbortE`
+  drops the ones not yet acknowledged.
 - `VirtualCMM` does not require `Home()` before it moves, has no machine volume
-  (error 2500) and no collisions (2504), and never reports 1014.
+  (error 2500) and no collisions (2504), and never reports 1003 or 1014 (neither does the twin).
   Every measuring tool accepts every measuring and scanning command, so the
   error 2002 ("Type of probe does not allow this operation") never occurs.
 - `VirtualCMM` stores coordinate system transformations and only re-expresses its position
@@ -487,8 +488,15 @@ Where this package departs from VDMA 8722:2024-04, or has to guess:
   `pi,pj,pk`, `si,sj,sk` and `R()` items of the `ScanOnCurve` format, the
   `include`/`exclude` flag of `ROI`, and the `Acqs(..)`, `ROIs(..)`, `QEPs(S(..))` and
   `GeoElem()` arguments of `FeatureExtract`.
-- The deprecated `FeatureExtraction` class (Annex J.2) is in the client but not
-  simulated.
+- The deprecated `FeatureExtraction` class (Annex J.2) is simulated by the minimal server and
+  the twin (`ROI`, `FeatureExtract`), with the guessed encodings above.
+- The twin raises faults on request (2501, 2502, 2503, 0503 and, from the tool changer, 1500),
+  reports touches that are illegal (1001) or too hard (2001 for excessive force),
+  checks that a tool can reach a requested alignment (1507, 2505), and compensates part
+  and scale temperature (`Part.Temperature`, `XpanCoefficient`). The optional protocols
+  `AlignmentSolver` and `TemperatureProvider` let a custom motion model do the same.
+- Not simulated: stylus CAD import, cameras attached to components, error 0507, and the
+  `PtMeasSelfCenter` report format beyond what the standard text shows.
 
 ## Command client window
 
