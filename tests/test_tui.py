@@ -9,11 +9,10 @@ from __future__ import annotations
 from textual.widgets import Button, Input, ListView, RichLog, Static
 from textual_autocomplete import AutoComplete, DropdownItem
 
+from pyippdme.cli.completion import completion_context
 from pyippdme.cli.tui import (
     _HELP_PLACEHOLDER,
-    _HELP_USAGE,
     IppDmeTui,
-    _completion_context,
     _format_signature,
 )
 
@@ -518,19 +517,19 @@ async def test_tui_help_for_a_positional_command_lists_its_parameters(
 
 
 def test_completion_context_parses_bare_command_name() -> None:
-    assert _completion_context("GoT") == (None, "GoT")
+    assert completion_context("GoT") == (None, "GoT")
 
 
 def test_completion_context_parses_inside_a_commands_arguments() -> None:
-    assert _completion_context("GoTo(Sy") == ("GoTo", "Sy")
+    assert completion_context("GoTo(Sy") == ("GoTo", "Sy")
 
 
 def test_completion_context_after_closing_the_command_reverts_to_bare() -> None:
-    assert _completion_context("GoTo(X(10)) ") == (None, "")
+    assert completion_context("GoTo(X(10)) ") == (None, "")
 
 
 def test_completion_context_nested_groups_reuse_the_outer_command() -> None:
-    assert _completion_context("ScanOnCurve(Format(") == ("ScanOnCurve", "")
+    assert completion_context("ScanOnCurve(Format(") == ("ScanOnCurve", "")
 
 
 def test_format_signature_renders_a_dash_bullet_list_without_indentation() -> None:
@@ -707,11 +706,30 @@ async def test_tui_help_meta_command_output_is_echoed_to_the_log(tcp_server_port
 
         log_text = "\n".join(line.text for line in app.query_one("#log", RichLog).lines)
         assert ".help GoTo" in log_text
-        assert "Positions [enum]" in log_text
-        assert "Sync* [int]" in log_text
+        assert "Positions  [enum]" in log_text
+        assert "Sync*      [int]" in log_text
+        assert "Returns:" in log_text
 
 
-async def test_tui_help_meta_command_without_argument_shows_usage(tcp_server_port: int) -> None:
+async def test_tui_help_meta_command_without_argument_lists_the_meta_commands(
+    tcp_server_port: int,
+) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        command_input = app.query_one("#command_input", Input)
+        command_input.focus()
+
+        command_input.value = ".help"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        log_text = "\n".join(line.text for line in app.query_one("#log", RichLog).lines)
+        for name in (".help", ".cmds", ".man", ".quit"):
+            assert name in log_text
+
+
+async def test_tui_cmds_and_man_meta_commands(tcp_server_port: int) -> None:
     app = IppDmeTui("127.0.0.1", tcp_server_port)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -719,11 +737,32 @@ async def test_tui_help_meta_command_without_argument_shows_usage(tcp_server_por
         panel = app.query_one("#signature_text", Static)
         command_input.focus()
 
-        command_input.value = ".help"
+        command_input.value = ".cmds scan"
+        await pilot.press("enter")
+        await pilot.pause()
+        command_input.value = ".man ptmeas"
         await pilot.press("enter")
         await pilot.pause()
 
-        assert str(panel.content) == _HELP_USAGE
+        log_text = "\n".join(line.text for line in app.query_one("#log", RichLog).lines)
+        assert "Scan:" in log_text
+        assert "ScanOnLine" in log_text
+        assert "PtMeas - Measure one point" in log_text
+        assert "Axes" in str(panel.content)
+
+
+async def test_tui_quit_meta_command_leaves_the_app(tcp_server_port: int) -> None:
+    app = IppDmeTui("127.0.0.1", tcp_server_port)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        command_input = app.query_one("#command_input", Input)
+        command_input.focus()
+
+        command_input.value = ".quit"
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert app.return_code is not None or not app.is_running
 
 
 async def test_tui_help_meta_command_for_an_unknown_command(tcp_server_port: int) -> None:

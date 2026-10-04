@@ -22,6 +22,7 @@ from pyippdme.server.registry import CommandRegistry
 from pyippdme.simulation.classes import (
     register_cartcmm_class,
     register_dme_class,
+    register_feature_class,
     register_formtester_class,
     register_mover_class,
     register_part_class,
@@ -49,6 +50,7 @@ DEFAULT_COMMAND_CLASSES: Sequence[Callable[[CommandRegistry], None]] = (
     register_rotarytable_class,
     register_part_class,
     register_rawdata_class,
+    register_feature_class,
 )
 
 __all__ = ["DEFAULT_COMMAND_CLASSES"]

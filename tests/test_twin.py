@@ -92,7 +92,7 @@ async def test_noise_follows_the_machine_accuracy(
     assert 0.0 < spread < 0.02  # micrometres, within the MPE of the machine
 
 
-async def test_stylus_collides_with_the_sample(
+async def test_the_tip_touching_the_sample_during_a_move_is_an_illegal_touch(
     twin_machine: tuple[DigitalTwin, IppDmeMachine],
 ) -> None:
     twin, machine = twin_machine
@@ -104,10 +104,28 @@ async def test_stylus_collides_with_the_sample(
     await machine.cart_cmm.go_to(x=cx - 200, y=cy, z=below_top)
     with pytest.raises(IppDmeServerError) as error:
         await machine.cart_cmm.go_to(x=cx, y=cy)
-    assert "2504" in str(error.value)
+    assert "1001" in str(error.value)  # the ball triggered; the stylus did not hit anything
     await machine.server.clear_all_errors()
-    # The machine stood still where it hit, short of the target.
+    # The machine stood still where it touched, short of the target, and nothing broke.
     assert (await machine.cart_cmm.get_position())[0] < cx
+    assert not twin.snapshot().detached
+
+
+async def test_a_scanning_probe_pushed_into_the_part_reports_excessive_force(
+    twin_machine: tuple[DigitalTwin, IppDmeMachine],
+) -> None:
+    twin, machine = twin_machine
+    await machine.dme.home()
+    await machine.tool_changer.change_tool("ScanSP25")
+    lo, hi = twin.objects[0].world_bounds(twin.machine.rotary_pose(0.0))
+    cx, cy = float((lo[0] + hi[0]) / 2), float((lo[1] + hi[1]) / 2)
+    below_top = twin.machine.spec.table_top_z + 30.0 - 10.0
+    await machine.cart_cmm.go_to(x=cx - 200, y=cy, z=float(hi[2]) + 30)
+    await machine.cart_cmm.go_to(x=cx - 200, y=cy, z=below_top)
+    with pytest.raises(IppDmeServerError) as error:
+        await machine.cart_cmm.go_to(x=cx, y=cy)
+    assert "2001" in str(error.value)
+    await machine.server.clear_all_errors()
 
 
 async def test_line_scanner_returns_a_point_cloud_of_the_sample(

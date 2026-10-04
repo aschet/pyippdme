@@ -392,7 +392,7 @@ _SCAN_REPORT_NAMES = (
 _IJK_ACT_NOMINAL = 2.0
 
 
-def _report_values(ctx: Ctx, point: Vec3, ijk: Vec3, cause: str) -> tuple[Number, ...]:
+def report_values(ctx: Ctx, point: Vec3, ijk: Vec3, cause: str) -> tuple[Number, ...]:
     """Build one scanned point's bare values, in the order ``OnScanReport`` asked for."""
     axis: dict[str, int] = {ParameterName.X: 0, ParameterName.Y: 1, ParameterName.Z: 2}
     values: list[Number] = []
@@ -608,7 +608,7 @@ async def _scan_on_curve(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
             if rotary_table and nominal.rotary is not None:
                 ctx.state.rotary_table.position = nominal.rotary
             yield NumericData(
-                _report_values(ctx, nominal.position, nominal.ijk, CommandName.SCAN_ON_CURVE)
+                report_values(ctx, nominal.position, nominal.ijk, CommandName.SCAN_ON_CURVE)
             )
 
     return _stream()
@@ -653,7 +653,7 @@ async def _scan_on_circle(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult
         await implicit_pt_meas(ctx, start, _surface_direction(center, start, unit_normal, sfa))
         async for point in backend.scan_circle(center, start, normal, delta, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
-            yield NumericData(_report_values(ctx, point, unit_normal, CommandName.SCAN_ON_CIRCLE))
+            yield NumericData(report_values(ctx, point, unit_normal, CommandName.SCAN_ON_CIRCLE))
 
     return _stream()
 
@@ -689,7 +689,7 @@ async def _scan_on_helix(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
             center, start, normal, delta, step_w, pitch, ctx.cancel
         ):
             ctx.state.cart_cmm.position = point
-            yield NumericData(_report_values(ctx, point, unit_normal, CommandName.SCAN_ON_HELIX))
+            yield NumericData(report_values(ctx, point, unit_normal, CommandName.SCAN_ON_HELIX))
 
     return _stream()
 
@@ -721,7 +721,7 @@ async def _scan_on_line(ctx: Ctx, args: tuple[Argument, ...]) -> HandlerResult:
         await implicit_pt_meas(ctx, start, unit_normal)
         async for point in backend.scan_line(start, end, normal, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
-            yield NumericData(_report_values(ctx, point, unit_normal, CommandName.SCAN_ON_LINE))
+            yield NumericData(report_values(ctx, point, unit_normal, CommandName.SCAN_ON_LINE))
 
     return _stream()
 
@@ -779,7 +779,7 @@ def _contour_stream(
             await implicit_pt_meas(ctx, scan.start, normalize(scan.probe))
         async for point in backend.scan_contour(scan, ctx.cancel):
             ctx.state.cart_cmm.position = point
-            yield NumericData(_report_values(ctx, point, reference, cause))
+            yield NumericData(report_values(ctx, point, reference, cause))
 
     return _stream()
 
@@ -859,7 +859,7 @@ async def _scan_in_plane_end_is_sphere(ctx: Ctx, args: tuple[Argument, ...]) -> 
         async for point in backend.scan_line(start, end, normal, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
             yield NumericData(
-                _report_values(ctx, point, unit_normal, CommandName.SCAN_IN_PLANE_END_IS_SPHERE)
+                report_values(ctx, point, unit_normal, CommandName.SCAN_IN_PLANE_END_IS_SPHERE)
             )
             if norm(sub(point, end)) <= dia:
                 sphere_entries += 1
@@ -972,7 +972,7 @@ async def _scan_in_plane_end_is_plane(ctx: Ctx, args: tuple[Argument, ...]) -> H
         async for point in backend.scan_line(start, end, normal, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
             yield NumericData(
-                _report_values(ctx, point, unit_normal, CommandName.SCAN_IN_PLANE_END_IS_PLANE)
+                report_values(ctx, point, unit_normal, CommandName.SCAN_IN_PLANE_END_IS_PLANE)
             )
             side = _plane_side(point, plane_point, plane_normal_unit)
             if side * start_side <= 0:
@@ -1068,7 +1068,7 @@ async def _scan_in_plane_end_is_cyl(ctx: Ctx, args: tuple[Argument, ...]) -> Han
         async for point in backend.scan_line(start, end, normal, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
             yield NumericData(
-                _report_values(ctx, point, unit_normal, CommandName.SCAN_IN_PLANE_END_IS_CYL)
+                report_values(ctx, point, unit_normal, CommandName.SCAN_IN_PLANE_END_IS_CYL)
             )
             if _radial_distance(point, axis_point, axis_unit) <= d:
                 entries += 1
@@ -1163,7 +1163,7 @@ async def _scan_in_cyl_end_is_sphere(ctx: Ctx, args: tuple[Argument, ...]) -> Ha
         async for point in backend.scan_line(start, end, axis_unit, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
             yield NumericData(
-                _report_values(ctx, point, axis_unit, CommandName.SCAN_IN_CYL_END_IS_SPHERE)
+                report_values(ctx, point, axis_unit, CommandName.SCAN_IN_CYL_END_IS_SPHERE)
             )
             if norm(sub(point, end)) <= dia:
                 sphere_entries += 1
@@ -1260,7 +1260,7 @@ async def _scan_in_cyl_end_is_plane(ctx: Ctx, args: tuple[Argument, ...]) -> Han
         async for point in backend.scan_line(start, end, axis_unit, step_w, ctx.cancel):
             ctx.state.cart_cmm.position = point
             yield NumericData(
-                _report_values(ctx, point, axis_unit, CommandName.SCAN_IN_CYL_END_IS_PLANE)
+                report_values(ctx, point, axis_unit, CommandName.SCAN_IN_CYL_END_IS_PLANE)
             )
             side = _plane_side(point, plane_point, plane_normal_unit)
             if side * start_side <= 0:

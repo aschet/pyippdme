@@ -382,6 +382,11 @@ class MainWindow(QMainWindow):
             action.setChecked(True)
             action.toggled.connect(lambda on, a=attr: self._set_view_flag(a, on))
             view_menu.addAction(action)
+        self.gl_action = QAction("OpenGL rendering", self, checkable=True)
+        self.gl_action.setChecked(self.viewport.renderer == "gl")
+        self.gl_action.setToolTip("Draw the 3D view on the graphics card (software if it fails)")
+        self.gl_action.toggled.connect(self._set_renderer)
+        view_menu.addAction(self.gl_action)
         view_menu.addSeparator()
         for dock in self.findChildren(QDockWidget):
             view_menu.addAction(dock.toggleViewAction())
@@ -398,6 +403,16 @@ class MainWindow(QMainWindow):
     def _view_toggled(self, name: str, on: bool) -> None:
         if on:
             self.set_view(name)
+
+    def _set_renderer(self, on: bool) -> None:
+        self.viewport.set_renderer("gl" if on else "software")
+        # A machine that cannot do OpenGL falls back by itself; show what is really in use.
+        QTimer.singleShot(300, self._show_renderer)
+
+    def _show_renderer(self) -> None:
+        self.gl_action.blockSignals(True)
+        self.gl_action.setChecked(self.viewport.renderer == "gl")
+        self.gl_action.blockSignals(False)
 
     def _set_view_flag(self, name: str, on: bool) -> None:
         setattr(self.viewport, name, on)
@@ -517,6 +532,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self._timer.stop()
+        self.viewport.shutdown()
         self.teach_panel.shutdown()
         self.check_panel.shutdown()
         self.host.shutdown()

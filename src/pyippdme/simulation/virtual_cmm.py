@@ -134,6 +134,7 @@ class VirtualCMM(IppDmeServer[SimulationState]):
         on_line_sent: LineHook | None = None,
         on_connect: Callable[[str], None] | None = None,
         on_disconnect: Callable[[str], None] | None = None,
+        max_pending: int | None = None,
     ) -> None:
         super().__init__(
             backend=backend if backend is not None else SimulatedBackend(),
@@ -154,6 +155,7 @@ class VirtualCMM(IppDmeServer[SimulationState]):
             on_line_sent=on_line_sent,
             on_connect=on_connect,
             on_disconnect=on_disconnect,
+            max_pending=max_pending,
         )
 
     # -- events the server sends on its own (5.5.3) ----------------------------------
@@ -218,6 +220,24 @@ class VirtualCMM(IppDmeServer[SimulationState]):
             return False
         activate_tool(self._context(state), tool_name)
         return await self.send_event(server_builders.tool_changed(tool_name))
+
+    async def data_acquire(
+        self,
+        acq_name: str,
+        acquisition_type: str,
+        settings_name: str,
+        points: Sequence[tuple[Vec3, Vec3, Vec3]] = (),
+    ) -> bool:
+        """Take a measurement at the machine: the client gets ``DataAcquire(...)`` (6.15).
+
+        Like the other unsolicited events it is sent only while the user is enabled.
+        """
+        state = self.active_state
+        if state is None or not state.mover.user_enabled:
+            return False
+        return await self.send_event(
+            server_builders.data_acquire_event(acq_name, acquisition_type, settings_name, points)
+        )
 
     async def open_tool_collection(self, path: str) -> bool:
         """Open a tool collection at the machine: the client gets ``OpenToolCollection(path)``."""

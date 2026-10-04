@@ -134,6 +134,9 @@ API Reference
 .. automodule:: pyippdme.client.commandform
    :members:
 
+.. automodule:: pyippdme.client.reference
+   :members:
+
 .. automodule:: pyippdme.client.optical
    :members:
 
