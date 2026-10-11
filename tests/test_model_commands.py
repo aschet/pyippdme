@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 
@@ -325,3 +326,18 @@ async def test_scans_can_report_more_than_the_position(machine: IppDmeMachine) -
     points = [p async for p in scan.scan_on_line((0, 0, 0), (4, 0, 0), (0, 0, 1), 2.0)]
     assert [p.number("X") for p in points] == [0.0, 2.0, 4.0]
     assert all(p.vector("IJK") == (0.0, 0.0, 1.0) for p in points)
+
+
+async def test_a_raw_data_file_that_cannot_be_written_is_error_2005(
+    machine: IppDmeMachine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blocker = tmp_path / "a_file"
+    blocker.write_text("not a directory")
+    monkeypatch.setattr(
+        "pyippdme.simulation.classes.rawdata_class.default_raw_data_directory",
+        lambda: blocker / "raw",
+    )
+    await machine.raw_data.data_acquire("Acq1", "SingleShot", "Settings")
+    with pytest.raises(IppDmeServerError) as error:
+        await machine.raw_data.get_raw_data_file("Acq1")
+    assert error.value.error.number == "2005"

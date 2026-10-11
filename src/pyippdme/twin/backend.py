@@ -109,7 +109,7 @@ class TwinBackend:
         twin = self._twin
         if not directions:
             return nominal, None
-        best: tuple[Vec3, float, Vec3] | None = None
+        best: tuple[Vec3, float, Vec3, object] | None = None
         for direction in directions:
             if norm(direction) < 1e-9:
                 continue
@@ -120,15 +120,15 @@ class TwinBackend:
                 and hit[1] <= _APPROACH + _FOLLOW_RANGE
                 and (best is None or hit[1] < best[1])
             ):
-                best = (hit[0], hit[1], unit)
+                best = (hit[0], hit[1], unit, hit[2])
         if best is None:
             return nominal, None
-        point, _, unit = best
+        point, _, unit, obj = best
         if twin.noise_enabled:
             spec = twin.toolkit.spec(twin.tool_name())
             placement = twin.placement(twin._pos)
             point = twin._apply_probe_errors(point, unit, spec, placement)
-        return point, unit
+        return twin.apply_thermal(point, obj), unit  # type: ignore[arg-type]
 
     def scan_line(
         self, start: Vec3, end: Vec3, normal: Vec3, step_w: float, cancel: CancellationToken

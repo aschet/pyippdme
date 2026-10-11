@@ -32,6 +32,19 @@ class TwinMotion:
     def csy_context(self) -> CsyContext:
         return self._twin.csy_context()
 
+    def part_temperature(self) -> float:
+        """Return the temperature of the part as its sensor would read it."""
+        return self._twin.temperature
+
+    def ambient_temperature(self) -> float:
+        """Return the temperature of the room."""
+        return self._twin.ambient_temperature
+
+    def scale_temperature(self, axis: str) -> float:
+        """Return the temperature of the scale of ``axis``; the scales follow the room."""
+        del axis
+        return self._twin.ambient_temperature
+
     async def home(self, cancel: asyncio.Event) -> Vec3:
         await self._twin.run_home(cancel)
         return self._twin.to_client((0.0, 0.0, 0.0))
@@ -114,6 +127,9 @@ class TwinMotion:
         if request.cancel.is_set():
             return position
         if hit is not None:
+            if twin.last_hit_was_touch:
+                code, text = twin.report_touch(hit, end)
+                raise MotionError(ErrorSeverity.ERROR, ErrorCode(code), cause, text, end)
             twin.report_collision(hit, end)
             raise MotionError(
                 ErrorSeverity.CRITICAL, ErrorCode.COLLISION, cause, f"Collision with {hit}", end

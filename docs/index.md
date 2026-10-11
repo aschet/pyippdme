@@ -447,10 +447,11 @@ own temperature is not modelled.
 
 Where this package departs from VDMA 8722:2024-04, or has to guess:
 
-- The server acknowledges every command at once. The standard (5.4.3) lets a server
-  delay the Ack until it can accept more commands.
+- Without `max_pending` the server acknowledges every command at once. With it (5.4.3), the
+  Ack of a command is delayed until fewer than that many commands are unfinished; `AbortE`
+  drops the ones not yet acknowledged.
 - `VirtualCMM` does not require `Home()` before it moves, has no machine volume
-  (error 2500) and no collisions (2504), and never reports 1014.
+  (error 2500) and no collisions (2504), and never reports 1003 or 1014 (neither does the twin).
   Every measuring tool accepts every measuring and scanning command, so the
   error 2002 ("Type of probe does not allow this operation") never occurs.
 - `VirtualCMM` stores coordinate system transformations and only re-expresses its position
@@ -487,8 +488,15 @@ Where this package departs from VDMA 8722:2024-04, or has to guess:
   `pi,pj,pk`, `si,sj,sk` and `R()` items of the `ScanOnCurve` format, the
   `include`/`exclude` flag of `ROI`, and the `Acqs(..)`, `ROIs(..)`, `QEPs(S(..))` and
   `GeoElem()` arguments of `FeatureExtract`.
-- The deprecated `FeatureExtraction` class (Annex J.2) is in the client but not
-  simulated.
+- The deprecated `FeatureExtraction` class (Annex J.2) is simulated by the minimal server and
+  the twin (`ROI`, `FeatureExtract`), with the guessed encodings above.
+- The twin raises faults on request (2501, 2502, 2503, 0503 and, from the tool changer, 1500),
+  reports touches that are illegal (1001) or too hard (2001 for excessive force),
+  checks that a tool can reach a requested alignment (1507, 2505), and compensates part
+  and scale temperature (`Part.Temperature`, `XpanCoefficient`). The optional protocols
+  `AlignmentSolver` and `TemperatureProvider` let a custom motion model do the same.
+- Not simulated: stylus CAD import, cameras attached to components, error 0507, and the
+  `PtMeasSelfCenter` report format beyond what the standard text shows.
 
 ## Command client window
 
@@ -523,6 +531,18 @@ a thread (commands may overlap, so `AbortE` works during a move), `pyippdme.clie
 builds the command lines of the dialogs, `pyippdme.client.commandform` the forms of all
 commands, and `pyippdme.client.optical` reads a sensor and acquires points; use them to put
 another interface on the client.
+
+### 3D rendering
+
+On a desktop the 3D view draws with OpenGL: the meshes are uploaded to the graphics card once and
+drawn with their pose, so orbiting the camera and moving the machine stay smooth even with a
+heavy part (about 14 times faster than the software renderer in a test with 86,000 triangles
+and a CPU-only OpenGL; a real graphics card is faster still). It needs nothing beyond PySide6.
+If no OpenGL context can be made (a remote desktop, the offscreen platform used in CI, a driver
+that fails to compile the shaders) the view falls back to a software renderer that projects and
+sorts the triangles with numpy. **View > OpenGL rendering** switches between them, and the
+environment variable `PYIPPDME_RENDERER` (`auto`, `gl` or `software`) sets the default. The
+corner of the view names the renderer in use.
 
 ### Coordinate systems
 
@@ -562,6 +582,27 @@ What to use for what, without reading the simulation code:
 `examples/client_without_gui.py` drives a server with `ClientHost`, `recipes` and `optical`.
 
 ## Interactive shell
+
+In the simple shell (`ippdme client`), Tab completes the command name at the start of the line, and
+directly inside a command's brackets its argument names (`GoTo(` then `R`, `Sync`, `X`, ...). Further
+Tabs cycle through the matches in place (Shift+Tab goes back), with no list or popup. It
+uses the standard library's `readline`, so it is on where that exists (Linux; macOS lists the
+matches instead). Ctrl+D quits, and the shell says so when it starts.
+
+The shell (and the full-screen `ippdme tui`, which has the same dot commands and a dropdown for them) also has meta commands, which start with a dot and are not sent to the server:
+`.help` lists them, `.cmds [group]` lists the commands by task, `.man <command>` prints what a
+command does, its arguments with their types (`*` marks an optional one, bare values are written
+in order without their names), what it returns and an example, and `.quit` leaves (Ctrl+D does
+too). Tab completes the meta command names and the command after `.man`. The descriptions are
+written for this package and are not the text of the standard; read the standard for exact
+definitions.
+
+`pyippdme.client.reference.CommandReference` holds the same information for other front ends:
+`find(name)` returns a `CommandDoc` (summary, signature, arguments with type, optional and
+description, return value, notes, example, group), `groups()`, `search()` and `manual()` give the
+rest, and `describe()` adds a command of your own. `MetaCommands` is the dot commands as a class
+(`run(line)` returns the text and whether to quit). The command client window shows the same
+page in its Help tab (F1).
 
 ```bash
 ippdme client 127.0.0.1 1294

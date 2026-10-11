@@ -69,7 +69,7 @@ from pyippdme.twin.planning import (
     travel_time,
 )
 from pyippdme.twin.spec import ToolSpec
-from pyippdme.twin.toolmath import OPTICAL_MODES, drop, head_rotation, tip_offset
+from pyippdme.twin.toolmath import OPTICAL_MODES, drop, head_rotation, reach_orientation, tip_offset
 from pyippdme.twin.tools import ToolKit, ToolModel
 from pyippdme.types.csy import (
     CSY_CHAIN,
@@ -87,6 +87,39 @@ Listener = Callable[["TwinEvent"], None]
 
 #: A steel sample: 11.5 um/m/K.
 STEEL_CTE = 11.5e-6
+#: Faults the machine can have, by name: severity, error code and text of what moving raises.
+FAULTS: dict[str, tuple[ErrorSeverity, str, str]] = {
+    "axis_position_error": (
+        ErrorSeverity.CRITICAL,
+        ErrorCode.AXIS_POSITION_ERROR,
+        "Axis position error: an axis does not follow its command",
+    ),
+    "axis_not_active": (
+        ErrorSeverity.CRITICAL,
+        ErrorCode.AXIS_NOT_ACTIVE,
+        "Axis not active: a drive is switched off",
+    ),
+    "scale_read_head": (
+        ErrorSeverity.FATAL,
+        ErrorCode.SCALE_READ_HEAD_FAILURE,
+        "Scale read head failure",
+    ),
+    "controller_link": (
+        ErrorSeverity.FATAL,
+        ErrorCode.CONTROLLER_COMMUNICATIONS_FAILURE,
+        "No communication with the controller",
+    ),
+}
+#: Faults that only the tool changer notices: a module that broke away cannot be seated again.
+TOOL_FAULTS: dict[str, tuple[ErrorSeverity, str, str]] = {
+    "reseat_failure": (
+        ErrorSeverity.CRITICAL,
+        ErrorCode.FAILED_TO_RESEAT_HEAD,
+        "The module cannot be seated again; the head needs service",
+    ),
+}
+#: Expansion of the glass-ceramic scales of the machine, per kelvin.
+SCALE_CTE = 8.0e-6
 _FRAME = 1.0 / 60.0
 #: Seconds a stylus-module change takes at the rack (TP20 modules: about 6 s with the moves).
 _MODULE_CHANGE_DWELL = 2.0
@@ -212,6 +245,11 @@ class TwinToolHandler:
     def avr_offsets(self, tool_name: str) -> Vec3 | None:
         return self._twin.avr_offsets(tool_name)
 
+    def reach(
+        self, tool_name: str, primary: Vec3, secondary: Vec3 | None
+    ) -> tuple[Vec3, Vec3 | None]:
+        return self._twin.reach_alignment(tool_name, primary, secondary)
+
 
 class ClientSensor:
     """Gives the optical sensor machine coordinates and the client its answers in its own CSY."""
@@ -296,10 +334,19 @@ class DigitalTwin:
         self.noise_enabled = True
         #: Part temperature in degrees Celsius; 20 is the reference (no thermal error).
         self.temperature = 20.0
+        #: Air temperature in the room; the scales of the machine follow it.
+        self.ambient_temperature = 20.0
+        #: Linear expansion of the part and of the machine scales, per kelvin.
+        self.part_cte = STEEL_CTE
+        self.scale_cte = SCALE_CTE
         #: Whether an unqualified tool carries a systematic error (and ``ReQualify`` is needed).
         self.require_qualification = True
         #: Safety: emergency stop pressed, and whether the air supply is within range.
         self.estop = False
+        #: Whether the last collision found was only the tip ball touching the part.
+        self.last_hit_was_touch = False
+        #: Machine faults that are switched on (see :data:`FAULTS`); each fails what moves.
+        self.faults: set[str] = set()
         self.air_ok = True
         self.rng = random.Random(seed)  # noqa: S311 # nosec B311 (simulation noise)
         self._seed = seed or 0
@@ -357,10 +404,13 @@ class DigitalTwin:
         on_line_sent: Callable[[str], None] | None = None,
         on_connect: Callable[[str], None] | None = None,
         on_disconnect: Callable[[str], None] | None = None,
+        max_pending: int | None = None,
     ) -> VirtualCMM:
         """Build the protocol server of this twin (use ``await server.start(host, port)``).
 
         The hooks are called after the twin has seen the line or the connection itself.
+        ``max_pending`` makes the server delay the acknowledgement of a command while that many
+        commands wait (5.4.3); by default it acknowledges at once.
         """
 
         def received(line: str) -> None:
@@ -397,6 +447,7 @@ class DigitalTwin:
             on_line_sent=sent,
             on_connect=connected,
             on_disconnect=disconnected,
+            max_pending=max_pending,
         )
         self.server = server
         return server
@@ -653,10 +704,7 @@ class DigitalTwin:
         """Raise the protocol error for a machine that must not move or measure now."""
         if self.estop:
             raise ServerError(
-                ErrorSeverity.CRITICAL,
-                ErrorCode.MACHINE_IN_ERROR_STATE,
-                cause,
-                "Emergency stop is active",
+                ErrorSeverity.CRITICAL, ErrorCode.EMERGENCY_STOP, cause, "Emergency stop is active"
             )
         if not self.air_ok:
             raise ServerError(
@@ -665,6 +713,10 @@ class DigitalTwin:
                 cause,
                 "Air pressure out of range",
             )
+        for fault in FAULTS:
+            if fault in self.faults:
+                severity, code, text = FAULTS[fault]
+                raise ServerError(severity, code, cause, text)
 
     def set_estop(self, pressed: bool) -> None:
         """Press or release the emergency stop; pressing it loses the reference (re-home)."""
@@ -673,6 +725,25 @@ class DigitalTwin:
             self._lose_reference()
         self.last_error = "Emergency stop" if pressed else ""
         self.emit("safety", estop=pressed, air_ok=self.air_ok)
+
+    def set_fault(self, kind: str, on: bool = True) -> None:
+        """Switch a machine fault on or off (see :data:`FAULTS`).
+
+        A fault stays until it is cleared. A fatal one (a failing scale, no link to the
+        controller) also loses the reference, so the machine has to be homed again.
+        """
+        known = {**FAULTS, **TOOL_FAULTS}
+        if kind not in known:
+            raise ValueError(f"unknown fault {kind!r}; choose from {', '.join(known)}")
+        if on:
+            self.faults.add(kind)
+            if known[kind][0] >= ErrorSeverity.FATAL:
+                self._lose_reference()
+            self.last_error = known[kind][2]
+        else:
+            self.faults.discard(kind)
+            self.last_error = ""
+        self.emit("safety", estop=self.estop, air_ok=self.air_ok)
 
     def set_air_ok(self, ok: bool) -> None:
         """Fail or restore the air supply; failing it brakes the machine and loses the reference."""
@@ -711,6 +782,24 @@ class DigitalTwin:
         offset = rotation[:3, :3] @ np.asarray(model.tip_offset)
         pivot = (tcp[0] - float(offset[0]), tcp[1] - float(offset[1]), tcp[2] - float(offset[2]))
         return ToolPlacement(name, spec, model, rotation, axis, pivot, orientation)
+
+    def reach_alignment(
+        self, name: str, primary: Vec3, secondary: Vec3 | None
+    ) -> tuple[Vec3, Vec3 | None]:
+        """Return the orientation the head of tool ``name`` gets for a requested one (client CSY).
+
+        An angle beyond the range of the head is ``2505``; an indexing head snaps to its step, so
+        the answer may differ from the request (``AlignTool`` then checks it against alpha).
+        """
+        spec = self.toolkit.spec(name)
+        context = self.csy_context()
+        try:
+            reached = reach_orientation(spec, self.to_machine_direction(primary, context))
+        except ValueError as error:
+            raise ServerError(
+                ErrorSeverity.ERROR, ErrorCode.ANGLE_OUT_OF_RANGE, "AlignTool", str(error)
+            ) from None
+        return self.to_client_direction(reached, context), secondary
 
     def alignment_volume(self, name: str) -> tuple[Vec3, float] | None:
         """Return the sphere that holds the tool in every alignment (``Tool.AlignmentVolume``).
@@ -879,16 +968,44 @@ class DigitalTwin:
         if self.noise_enabled:
             placement = self.placement(self._pos, name)
             point = self._apply_probe_errors(point, unit, spec, placement)
-        drift = STEEL_CTE * (self.temperature - 20.0)
-        if drift and obj is not None:
-            ref = obj.pose[:3, 3]
-            point = (
-                point[0] + drift * (point[0] - ref[0]),
-                point[1] + drift * (point[1] - ref[1]),
-                point[2] + drift * (point[2] - ref[2]),
-            )
+        point = self.apply_thermal(point, obj)
         self.record_contact(point, mode or spec.mode)
         return point
+
+    def apply_thermal(self, point: Vec3, obj: SceneObject | None) -> Vec3:
+        """Return ``point`` as the machine reports it with its thermal errors (6.5.2, 6.24.2).
+
+        The part grows with its own temperature about its origin; the server undoes that with the
+        ``Part.Temperature`` and ``Part.XpanCoefficient`` the client set (the coefficient is zero
+        until it does). The scales grow with the room temperature and read short; the server
+        corrects them with the scale temperatures it knows (``UpdateScaleTemperatures``,
+        ``SetScaleTemperatures``; 20 until then).
+        """
+        state = self.state
+        x, y, z = point
+        if obj is not None:
+            ref = obj.pose[:3, 3]
+            grown = 1.0 + self.part_cte * (self.temperature - 20.0)
+            known_temperature = 20.0
+            known_cte = 0.0
+            if state is not None:
+                known_temperature = state.part.properties.get("Part.Temperature", 20.0)
+                known_cte = state.part.properties.get("Part.XpanCoefficient", 0.0) * 1e-6
+            factor = grown / (1.0 + known_cte * (known_temperature - 20.0))
+            if abs(factor - 1.0) > 1e-12:
+                x, y, z = (
+                    float(ref[0]) + (x - ref[0]) * factor,
+                    float(ref[1]) + (y - ref[1]) * factor,
+                    float(ref[2]) + (z - ref[2]) * factor,
+                )
+        scales = []
+        for value, axis in zip((x, y, z), "XYZ", strict=True):
+            known = state.mover.scale_temperatures.get(axis, 20.0) if state is not None else 20.0
+            shrunk = (1.0 + self.scale_cte * (known - 20.0)) / (
+                1.0 + self.scale_cte * (self.ambient_temperature - 20.0)
+            )
+            scales.append(value * shrunk)
+        return (scales[0], scales[1], scales[2])
 
     def _apply_probe_errors(
         self, point: Vec3, unit: Vec3, spec: ToolSpec, placement: ToolPlacement
@@ -1005,6 +1122,24 @@ class DigitalTwin:
         self._pos = position
         self._rotary = rotary
         self._published = time.monotonic()
+
+    def report_touch(self, what: str, at: Vec3) -> tuple[str, str]:
+        """Note that the tip touched ``what`` during a move; return the error code and its text.
+
+        A touch probe triggers (illegal touch, 1001); a measuring probe is pushed beyond its
+        range (head error excessive force, 2001). Neither breaks the stylus away.
+        """
+        spec = self.toolkit.spec(self.tool_name())
+        if spec.mode in ("scanning", "head_touch"):
+            code, text = (
+                ErrorCode.HEAD_ERROR_EXCESSIVE_FORCE,
+                f"Excessive force on the head at {what}",
+            )
+        else:
+            code, text = ErrorCode.ILLEGAL_TOUCH, f"The probe touched {what} during a move"
+        self.last_error = text
+        self.emit("touch", what=what, at=at)
+        return str(code), text
 
     def report_collision(self, what: str, at: Vec3) -> None:
         name = self.tool_name()
@@ -1204,14 +1339,7 @@ class DigitalTwin:
         if self.noise_enabled:
             measured = self._apply_probe_errors(measured, unit, spec, self.placement(centre, name))
         obj = hit[2]
-        drift = STEEL_CTE * (self.temperature - 20.0)
-        if drift and obj is not None:
-            ref = obj.pose[:3, 3]
-            measured = (
-                measured[0] + drift * (measured[0] - ref[0]),
-                measured[1] + drift * (measured[1] - ref[1]),
-                measured[2] + drift * (measured[2] - ref[2]),
-            )
+        measured = self.apply_thermal(measured, obj)
         self.record_contact(measured, spec.mode)
         rest = start if request.retract < 0 else add(centre, scale(unit, request.retract))
         # The retract runs at the GoTo speed (Figure 29: the speed goes negative up to V_goto).
@@ -1239,6 +1367,9 @@ class DigitalTwin:
     ) -> None:
         """Drive to the rack, put the old module back, take the new one, return."""
         self.check_ready("ChangeTool")
+        if "reseat_failure" in self.faults and self.detached:
+            severity, code, text = TOOL_FAULTS["reseat_failure"]
+            raise ServerError(severity, code, "ChangeTool", text)
         self.detached.discard(target)  # a module that broke away is seated again by the change
         if current == target:
             return
@@ -1368,11 +1499,50 @@ class DigitalTwin:
                 hits, clearance = self._collisions(pos, rotary, request.tool_name, offset)
                 fresh = hits - ignored
                 if fresh:
-                    return previous, sorted(fresh)[0]
+                    name = sorted(fresh)[0]
+                    # Where does the contact begin? The step that found it may already have
+                    # pushed the stylus in; the first point of contact says what touched first.
+                    low, high = f - 1.0 / steps if steps else 0.0, f
+                    for _ in range(10):
+                        mid = (low + high) / 2.0
+                        mid_hits, _ = self._collisions(
+                            point_along(request.start, request.end, mid),
+                            request.rotary_start
+                            + (request.rotary_end - request.rotary_start) * mid,
+                            request.tool_name,
+                            offset,
+                        )
+                        if mid_hits - ignored:
+                            high = mid
+                        else:
+                            low = mid
+                    self.last_hit_was_touch = self._tip_only(
+                        point_along(request.start, request.end, high),
+                        request.rotary_start + (request.rotary_end - request.rotary_start) * high,
+                        request.tool_name,
+                        offset,
+                        name,
+                    )
+                    return previous, name
                 ignored &= hits
                 previous = pos
                 i += 1 if rotating or hits else free_steps(clearance, step_length)
         return request.end, None
+
+    def _tip_only(
+        self, tcp: Vec3, rotary: float, tool_name: str, probing_offset: Vec3 | None, name: str
+    ) -> bool:
+        """Whether only the tip ball of the stylus touches the object ``name`` (a probe trigger)."""
+        obj = next((o for o in self.objects if o.name == name), None)
+        if obj is None:
+            return False  # a part of the machine: the tool hit more than a surface
+        if probing_offset is not None:
+            tcp = add(tcp, probing_offset)
+        placement = self.placement(tcp, tool_name)
+        fixed, turning = placement.model.placed(placement.pivot, placement.rotation, with_tip=False)
+        body = cad.make_compound([fixed, turning])
+        world = obj.world_pose(self.machine.rotary_pose(rotary))
+        return bool(cad.min_distance(body, cad.moved(obj.shape, world)) >= 0.01)
 
     def _collisions(
         self, tcp: Vec3, rotary: float, tool_name: str, probing_offset: Vec3 | None

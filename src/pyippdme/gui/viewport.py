@@ -2,30 +2,47 @@
 #
 # SPDX-License-Identifier: MPL-2.0
 
-"""A 3D view of a :class:`~pyippdme.twin.view.SimulationView`, drawn with ``QPainter``.
+"""A 3D view of a :class:`~pyippdme.twin.view.SimulationView`.
 
-No OpenGL: the triangles are projected with numpy, sorted back to front and
-painted, so the view works everywhere (remote desktops, CI with the offscreen
-platform). While the camera is dragged the triangle count is capped; at rest the
-full mesh is drawn.
+Two renderers draw the same scene. On a desktop the view uses OpenGL
+(:mod:`pyippdme.gui.glcanvas`: the meshes live on the graphics card, so moving the camera or the
+machine is cheap). Without OpenGL (a remote desktop, CI with the offscreen platform, a driver
+that fails) it falls back to a software renderer: the triangles are projected with numpy, sorted
+back to front and painted with ``QPainter``; while the camera is dragged the triangle count is
+capped. ``renderer`` chooses: ``auto`` (OpenGL on a desktop platform), ``gl`` or ``software``;
+the environment variable ``PYIPPDME_RENDERER`` sets the default.
 """
 
 from __future__ import annotations
 
 import math
+import os
 
 import numpy as np
 from numpy.typing import NDArray
 from PySide6.QtCore import QPointF, Qt, QTimer
-from PySide6.QtGui import QColor, QImage, QMouseEvent, QPainter, QPen, QPolygonF, QWheelEvent
+from PySide6.QtGui import (
+    QColor,
+    QGuiApplication,
+    QImage,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QPolygonF,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import QWidget
 
+from pyippdme.gui.glcanvas import GLCanvas
 from pyippdme.twin.geometry import Mesh
 from pyippdme.twin.twin import DrawItem
 from pyippdme.twin.view import SimulationView
 
-_LIGHT = np.array([0.4, -0.5, 0.75])
-_LIGHT = _LIGHT / np.linalg.norm(_LIGHT)
+LIGHT = np.array([0.4, -0.5, 0.75])
+LIGHT = LIGHT / np.linalg.norm(LIGHT)
+_LIGHT = LIGHT
+#: Platforms without a graphics card to draw on: ``auto`` picks the software renderer there.
+_HEADLESS_PLATFORMS = ("offscreen", "minimal", "vnc", "linuxfb")
 #: Triangles painted while the camera moves.
 _INTERACTIVE_BUDGET = 6000
 _FOV = math.radians(35.0)
@@ -62,9 +79,18 @@ FOLLOW_VIEWS = ("follow", "probe", "table")
 class Viewport(QWidget):
     """Orbit with the left button, pan with the right (or Shift), zoom with the wheel."""
 
-    def __init__(self, view: SimulationView, parent: QWidget | None = None) -> None:
+    #: Vertical field of view of the camera, in radians.
+    fov = _FOV
+
+    def __init__(
+        self,
+        view: SimulationView,
+        parent: QWidget | None = None,
+        renderer: str | None = None,
+    ) -> None:
         super().__init__(parent)
         self.view = view
+        self._canvas: GLCanvas | None = None
         self.azimuth = math.radians(-55.0)
         self.elevation = math.radians(28.0)
         self.distance = 2000.0
@@ -87,6 +113,60 @@ class Viewport(QWidget):
         self._settle.setInterval(180)
         self._settle.timeout.connect(self._settled)
         self.fit()
+        self.set_renderer(renderer or os.environ.get("PYIPPDME_RENDERER", "auto"))
+
+    # -- renderer ----------------------------------------------------------------------
+
+    @property
+    def renderer(self) -> str:
+        """The renderer in use: ``gl`` or ``software``."""
+        return "gl" if self._canvas is not None else "software"
+
+    def set_renderer(self, name: str) -> None:
+        """Choose ``auto``, ``gl`` or ``software``; ``gl`` falls back if OpenGL does not work."""
+        if name not in ("auto", "gl", "software"):
+            raise ValueError(f"unknown renderer {name!r}")
+        if name == "auto":
+            name = "software" if QGuiApplication.platformName() in _HEADLESS_PLATFORMS else "gl"
+        if name == "software":
+            self._drop_canvas()
+        elif self._canvas is None:
+            self._canvas = GLCanvas(self, self)
+            self._canvas.failed.connect(self._gl_failed)
+            self._canvas.setGeometry(self.rect())
+            self._canvas.show()
+            QTimer.singleShot(0, self._check_canvas)
+        self.update()
+
+    def shutdown(self) -> None:
+        """Free the OpenGL resources; the window calls this when it closes."""
+        self._drop_canvas()
+
+    def _drop_canvas(self) -> None:
+        canvas, self._canvas = self._canvas, None
+        if canvas is not None:
+            canvas.release()
+            canvas.hide()
+            canvas.deleteLater()
+
+    def _check_canvas(self) -> None:
+        """Fall back to software when the platform cannot give an OpenGL context."""
+        if self._canvas is not None and not self._canvas.isValid() and self.isVisible():
+            self._gl_failed("no OpenGL context")
+
+    def _gl_failed(self, reason: str) -> None:
+        del reason
+        QTimer.singleShot(0, self._drop_canvas)
+        self.update()
+
+    def resizeEvent(self, event: object) -> None:  # noqa: N802
+        super().resizeEvent(event)  # type: ignore[arg-type]
+        if self._canvas is not None:
+            self._canvas.setGeometry(self.rect())
+
+    def showEvent(self, event: object) -> None:  # noqa: N802
+        super().showEvent(event)  # type: ignore[arg-type]
+        QTimer.singleShot(0, self._check_canvas)
 
     # -- camera ------------------------------------------------------------------------
 
@@ -245,6 +325,9 @@ class Viewport(QWidget):
 
     def paintEvent(self, event: object) -> None:  # noqa: N802
         del event
+        if self._canvas is not None:
+            self._canvas.update()  # the OpenGL surface is a child widget: it draws the scene
+            return
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(30, 33, 40))
         try:
@@ -254,6 +337,16 @@ class Viewport(QWidget):
 
     def render_to_image(self, width: int = 960, height: int = 640) -> QImage:
         """Draw the current view into an image (for screenshots and tests)."""
+        if self._canvas is not None and self._canvas.ok:
+            old = self.size()
+            self.resize(width, height)
+            self._canvas.setGeometry(self.rect())
+            image = self._canvas.grabFramebuffer()
+            self.resize(old)
+            if image.width() != width or image.height() != height:
+                # The widget has a minimum size and a device pixel ratio of its own.
+                image = image.scaled(width, height, Qt.AspectRatioMode.IgnoreAspectRatio)
+            return image
         image = QImage(width, height, QImage.Format.Format_RGB32)
         old = self.size()
         self.resize(width, height)
@@ -315,7 +408,7 @@ class Viewport(QWidget):
                     painter.setBrush(QColor(*key))
                     last = key
                 painter.drawPolygon(QPolygonF([QPointF(float(p[0]), float(p[1])) for p in tri]))
-        self._paint_overlay(painter, view)
+        self._paint_overlay(painter, view, points=True)
 
     def _line(self, painter: QPainter, view: NDArray[np.float64], a: object, b: object) -> None:
         xy, depth = self._project(np.asarray([a, b], dtype=float), view)
@@ -347,7 +440,9 @@ class Viewport(QWidget):
             if depth[0] > 1.0:
                 painter.drawText(QPointF(xy[0, 0] + 6, xy[0, 1] + 14 + 12 * (i % 2)), label)
 
-    def _paint_overlay(self, painter: QPainter, view: NDArray[np.float64]) -> None:
+    def _paint_overlay(
+        self, painter: QPainter, view: NDArray[np.float64], *, points: bool = True
+    ) -> None:
         lo, hi = self.view.bounds()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(QPen(QColor(120, 130, 150, 160), 1, Qt.PenStyle.DashLine))
@@ -372,10 +467,10 @@ class Viewport(QWidget):
 
         if self.show_csys:
             self._paint_csys(painter, view, axis_len)
-        if self.show_clouds:
+        if points and self.show_clouds:
             for cloud in list(self.view.clouds):
                 self._points(painter, view, cloud, None)
-        if self.show_contacts and self.view.contacts:
+        if points and self.show_contacts and self.view.contacts:
             self._points(
                 painter, view, np.asarray(list(self.view.contacts)), QColor(255, 80, 60), 3.0
             )
@@ -387,7 +482,9 @@ class Viewport(QWidget):
             painter.drawLine(QPointF(x - 9, y), QPointF(x + 9, y))
             painter.drawLine(QPointF(x, y - 9), QPointF(x, y + 9))
         painter.setPen(QColor(150, 160, 175))
-        painter.drawText(10, self.height() - 10, f"Camera: {self.camera}")
+        painter.drawText(
+            10, self.height() - 10, f"Camera: {self.camera}   Renderer: {self.renderer}"
+        )
 
     def _points(
         self,

@@ -97,7 +97,15 @@ class MachinePanel(QWidget):
         form.addRow("Motion", self.time_combo)
         form.addRow("Speed override", self.override)
         form.addRow(self.noise_check)
+        self.room_temperature = spin(5, 45, 20.0, 0.5, 1, " °C")
+        self.room_temperature.setToolTip(
+            "Temperature of the room; the scales of the machine follow it and read short when warm"
+        )
+        self.room_temperature.valueChanged.connect(
+            lambda v: setattr(self.twin, "ambient_temperature", v)
+        )
         form.addRow("Part temperature", self.temperature)
+        form.addRow("Room temperature", self.room_temperature)
         layout.addLayout(form)
         self.info = QLabel()
         self.info.setWordWrap(True)

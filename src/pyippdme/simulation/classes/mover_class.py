@@ -71,6 +71,7 @@ from pyippdme.protocol.errors import ErrorCode, ErrorSeverity, ServerError
 from pyippdme.protocol.signature import DataType, Parameter
 from pyippdme.server import builders
 from pyippdme.server._util import named_number
+from pyippdme.server.motion import TemperatureProvider
 from pyippdme.server.registry import CommandRegistry, HandlerResult
 from pyippdme.simulation.classes.tool_class import is_alignable_tool, tool_axis_value
 from pyippdme.simulation.context import Ctx
@@ -128,8 +129,11 @@ async def _enumerate_mover_axes(_ctx: Ctx, _args: tuple[Argument, ...]) -> Handl
     return builders.bare_names(*_MOVABLE_AXES)
 
 
-async def _update_scale_temperatures(_ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
-    # No real sensors to read from; nothing to do but accept the request.
+async def _update_scale_temperatures(ctx: Ctx, _args: tuple[Argument, ...]) -> HandlerResult:
+    # Take the temperatures of the scales from the sensors; a model without real sensors has none.
+    if isinstance(ctx.motion, TemperatureProvider):
+        for axis in ("X", "Y", "Z"):
+            ctx.state.mover.scale_temperatures[axis] = ctx.motion.scale_temperature(axis)
     return None
 
 

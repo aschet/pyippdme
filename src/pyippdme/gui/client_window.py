@@ -60,6 +60,7 @@ from pyippdme.client.report import report_from_payload
 from pyippdme.gui import client_dialogs as dialogs
 from pyippdme.gui.icons import app_icon, load_icon
 from pyippdme.gui.pointcloud import PointCloudView
+from pyippdme.gui.reference_view import ReferenceView
 from pyippdme.gui.widgets import Led, icon_button, mono, separator
 from pyippdme.protocol.ast import (
     BasicName,
@@ -301,6 +302,9 @@ class ClientWindow(QMainWindow):
             )
         )
         files.addAction(self._action("Clear log", "clear", self.clear_log, "Clear the log"))
+        self.help_action = self._action(
+            "Help", "info", self.show_help, "Show the manual page of the selected command", "F1"
+        )
         self.focus_action = self._action(
             "Command line", "run", lambda: self.command_line.setFocus(), "Type a command", "Ctrl+L"
         )
@@ -453,6 +457,8 @@ class ClientWindow(QMainWindow):
 
         self.response = _table(["Name", "Value"])
         self.tabs.addTab(self.response, load_icon("script"), "Last response")
+        self.reference_view = ReferenceView()
+        self.tabs.addTab(self.reference_view, load_icon("info"), "Help")
         self._dock("Results", self.tabs, Qt.DockWidgetArea.RightDockWidgetArea)
 
     def _build_status_bar(self) -> None:
@@ -513,7 +519,7 @@ class ClientWindow(QMainWindow):
             return
         self.connection_label.set_state("off", "Not connected")
         self.session_led.set_state("off", "No session")
-        self.homed_label.set_state("off", "")
+        self.homed_label.set_state("off", "Not homed")
         self.user_led.set_state("off", "User disabled")
         self.busy_led.set_state("off", "Ready")
         self.tool_label.clear()
@@ -607,6 +613,13 @@ class ClientWindow(QMainWindow):
         document = self.log.document()
         if document is not None and document.blockCount() > _LOG_LIMIT:
             self.log.clear()
+
+    def show_help(self) -> None:
+        """Open the Help tab on the selected command, or on the command typed in the line."""
+        word = self.command_line.text().strip().split("(")[0]
+        if word and self.reference_view.reference.resolve(word):
+            self.reference_view.show_command(word)
+        self.tabs.setCurrentWidget(self.reference_view)
 
     def clear_log(self) -> None:
         self.log.clear()
@@ -926,7 +939,9 @@ class ClientWindow(QMainWindow):
         self.form_edits.clear()
         if not name:
             self.form_status.setText("Pick a command to fill in its arguments.")
+            self.reference_view.show_hint()
             return
+        self.reference_view.show_command(name)
         fields = commandform.command_fields(name)
         for field in fields:
             edit = QLineEdit()

@@ -154,6 +154,36 @@ class RadiusProvider(Protocol):
 
 
 @runtime_checkable
+class AlignmentSolver(Protocol):
+    """Optional part of a :class:`ToolHandler`: the orientation a tool really reaches.
+
+    ``AlignTool`` and the ``Tool.A``/``Tool.B``/``Tool.Alignment`` arguments of ``GoTo`` ask it.
+    It returns the primary (and secondary) direction the head ends up in, which is not exactly
+    the requested one for a head that indexes in steps, and raises ``2505`` for an angle the head
+    cannot reach. Without it every orientation is reached exactly.
+    """
+
+    def reach(
+        self, tool_name: str, primary: Vec3, secondary: Vec3 | None
+    ) -> tuple[Vec3, Vec3 | None]: ...
+
+
+@runtime_checkable
+class TemperatureProvider(Protocol):
+    """Optional part of a :class:`MotionModel`: the temperatures the machine really has.
+
+    The temperature sensors of 6.5.2 (``ReadTemperatureSensor``, ``ReadAllTemperatures``) and
+    ``UpdateScaleTemperatures`` read them. Without it the sensors answer from what the client set.
+    """
+
+    def part_temperature(self) -> float: ...
+
+    def ambient_temperature(self) -> float: ...
+
+    def scale_temperature(self, axis: str) -> float: ...
+
+
+@runtime_checkable
 class MotionModel(Protocol):
     """Carries out a move; returns the position the tool centre point ends at."""
 
